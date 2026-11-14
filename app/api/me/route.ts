@@ -9,6 +9,8 @@ export async function GET(request: NextRequest) {
   if (!hasDatabase()) return Response.json({ error: "no_database" }, { status: 503 });
   try {
     const me = await currentProfile(token);
+    // Temporary diagnostics for "login is forgotten": was a cookie sent, and did the database know it? (no token values logged)
+    if (!me) console.log(`me: 401 cookie=${token ? "sent" : "missing"} ua=${(request.headers.get("user-agent") ?? "").slice(-40)}`);
     return me ? Response.json(me) : Response.json({ error: "unauthorized" }, { status: 401 });
   } catch (e) {
     if (e instanceof NoDatabaseError) return Response.json({ error: "no_database" }, { status: 503 });
