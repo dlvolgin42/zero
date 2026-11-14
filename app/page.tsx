@@ -1,10 +1,10 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, Check, HandCoins, Send, Shuffle, ChevronDown, ChevronRight, Copy, Delete, Hash, Mic, Search, Plus, UserPlus, X } from "lucide-react";
+import { ArrowLeft, CalendarDays, Check, ChevronLeft, HandCoins, Send, Shuffle, ChevronDown, ChevronRight, Copy, Delete, Hash, Mic, Search, Plus, UserPlus, X } from "lucide-react";
 import {
   Actions, ActionsButton, ActionsGroup, ActionsLabel, App, Block, BlockTitle, Button, Chip, Link, List, ListInput, ListItem,
-  Navbar, NavbarBackLink, Page, Segmented, SegmentedButton,
+  Navbar, Page, Segmented, SegmentedButton,
 } from "konsta/react";
 import { ME, demoExpenses, demoPeople } from "@/lib/demo";
 import {
@@ -422,7 +422,12 @@ export default function Root() {
 
   const page = (title: string, body: React.ReactNode, right?: React.ReactNode) => (
     <Page className="pb-40">
-      <Navbar title={title} left={screen.s !== "home" ? <NavbarBackLink text="Назад" onClick={back} /> : undefined} right={right} />
+      <Navbar title={title} left={screen.s !== "home" ? (
+        // Konsta's back link draws its own arrow; this keeps every icon in the app from Lucide.
+        <Link className="k-navbar-back-link" aria-label="Назад" onClick={back}>
+          {theme === "ios" ? <ChevronLeft className="size-7 -ml-1.5" strokeWidth={2.25} /> : <ArrowLeft className="size-6" />}
+        </Link>
+      ) : undefined} right={right} />
       {body}
     </Page>
   );
