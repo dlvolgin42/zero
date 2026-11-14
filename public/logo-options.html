@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zero — варианты логотипа</title>
+<style>
+  body { margin: 0; padding: 20px 16px 40px; background: #f4f5f7; color: #15181d; font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { margin: 0 0 16px; color: #6b7380; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .card { background: #fff; border-radius: 16px; padding: 14px; text-align: center; }
+  .big, .small { box-shadow: 0 0 0 1px rgba(0,0,0,.08); }
+  .big { width: 112px; height: 112px; border-radius: 22%; display: block; margin: 0 auto 10px; }
+  .row { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 8px; }
+  .small { width: 32px; height: 32px; border-radius: 22%; }
+  .word { font-weight: 700; font-size: 18px; letter-spacing: -0.02em; }
+  .name { font-size: 13px; color: #6b7380; }
+  .name b { color: #15181d; }
+</style>
+</head>
+<body>
+<h1>«Кольцо и равно»: цвета</h1>
+<p>Форма одна и та же. Сначала оранжевые, потом альтернативы.</p>
+<div class="grid" id="gridEq"></div>
+<h1 style="margin-top:28px">«Две половины»: цвета</h1>
+<p>Форма одна и та же, меняются только цвета.</p>
+<div class="grid" id="grid0"></div>
+<h1 style="margin-top:28px">Zero — варианты логотипа</h1>
+<p>Крупно — как иконка на телефоне, ниже — как в шапке приложения, 32 пикселя. Цвета условные, любой знак можно перекрасить.</p>
+<div class="grid" id="grid"></div>
+<h1 style="margin-top:28px">Стрелки: другие цвета</h1>
+<p>Цвета выбраны ради вида, без привязки к «должен — должны».</p>
+<div class="grid" id="grid2"></div>
+<script>
+  // Each mark is drawn on a 100x100 canvas, inside the central 60%.
+  const marks = [
+    { n: 1, name: "Кольцо", bg: "#4f46e5",
+      svg: '<circle cx="50" cy="50" r="22" fill="none" stroke="#fff" stroke-width="11"/>' },
+    { n: 2, name: "Две половины", bg: "#111827",
+      svg: '<path d="M46.2 28.3A22 22 0 0 0 46.2 71.7" fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round"/>' +
+           '<path d="M53.8 28.3A22 22 0 0 1 53.8 71.7" fill="none" stroke="#a5b4fc" stroke-width="11" stroke-linecap="round"/>' },
+    { n: 3, name: "Половины со сдвигом", bg: "#7c3aed",
+      svg: '<path d="M50 23A22 22 0 0 0 50 67" fill="none" stroke="#fff" stroke-width="11"/>' +
+           '<path d="M50 33A22 22 0 0 1 50 77" fill="none" stroke="#ddd6fe" stroke-width="11"/>' },
+    { n: 4, name: "Стрелки по кругу", bg: "#2563eb",
+      svg: '<path d="M42.5 29.3A22 22 0 0 0 42.5 70.7" fill="none" stroke="#fff" stroke-width="9"/>' +
+           '<polygon points="41,60.5 41,81 56,70.7" fill="#fff"/>' +
+           '<path d="M57.5 70.7A22 22 0 0 0 57.5 29.3" fill="none" stroke="#fff" stroke-width="9"/>' +
+           '<polygon points="59,19 59,39.5 44,29.3" fill="#fff"/>' },
+    { n: 5, name: "Ноль с чертой", bg: "#0f172a",
+      svg: '<ellipse cx="50" cy="50" rx="16" ry="23" fill="none" stroke="#fff" stroke-width="10"/>' +
+           '<line x1="40" y1="64" x2="60" y2="36" stroke="#38bdf8" stroke-width="7" stroke-linecap="round"/>' },
+    { n: 6, name: "Кольцо и равно", bg: "#f59e0b",
+      svg: '<circle cx="50" cy="50" r="24" fill="none" stroke="#111827" stroke-width="8"/>' +
+           '<line x1="41" y1="45" x2="59" y2="45" stroke="#111827" stroke-width="6" stroke-linecap="round"/>' +
+           '<line x1="41" y1="55" x2="59" y2="55" stroke="#111827" stroke-width="6" stroke-linecap="round"/>' },
+  ];
+  const G = "#059669", R = "#dc2626", GL = "#34d399", RL = "#f87171";
+  const ring = (g, r) =>
+    `<path d="M42.5 29.3A22 22 0 0 0 42.5 70.7" fill="none" stroke="${g}" stroke-width="9"/>` +
+    `<polygon points="41,60.5 41,81 56,70.7" fill="${g}"/>` +
+    `<path d="M57.5 70.7A22 22 0 0 0 57.5 29.3" fill="none" stroke="${r}" stroke-width="9"/>` +
+    `<polygon points="59,19 59,39.5 44,29.3" fill="${r}"/>`;
+  const shifted = (g, r) =>
+    `<path d="M50 23A22 22 0 0 0 50 67" fill="none" stroke="${g}" stroke-width="10"/>` +
+    `<polygon points="49,56 49,78 64,67" fill="${g}"/>` +
+    `<path d="M50 77A22 22 0 0 0 50 33" fill="none" stroke="${r}" stroke-width="10"/>` +
+    `<polygon points="51,22 51,44 36,33" fill="${r}"/>`;
+  const marks2 = [
+    { n: "А", name: "Фиолетовый градиент", bg: "linear-gradient(135deg,#8b5cf6,#4338ca)", svg: shifted("#ffffff", "#c4b5fd") },
+    { n: "Б", name: "Чёрный и лайм", bg: "#0a0a0a", svg: shifted("#d9f99d", "#ffffff") },
+    { n: "В", name: "Ночной: циан и сирень", bg: "#0b1020", svg: shifted("#22d3ee", "#a78bfa") },
+    { n: "Г", name: "Закат", bg: "linear-gradient(135deg,#fb7185,#f97316)", svg: shifted("#ffffff", "#ffe4d6") },
+    { n: "Д", name: "Молочный, чёрный и оранж", bg: "#faf6ef", svg: shifted("#111111", "#ff5a1f") },
+    { n: "Е", name: "Чёрный: розовый и жёлтый", bg: "#0a0a0a", svg: shifted("#ff3d81", "#ffd60a") },
+    { n: "Ж", name: "По кругу: циан и сирень", bg: "#0b1020", svg: ring("#22d3ee", "#a78bfa") },
+    { n: "З", name: "По кругу: чёрный и лайм", bg: "#0a0a0a", svg: ring("#d9f99d", "#ffffff") },
+  ];
+  const halves = (a, b) =>
+    `<path d="M46.2 28.3A22 22 0 0 0 46.2 71.7" fill="none" stroke="${a}" stroke-width="11" stroke-linecap="round"/>` +
+    `<path d="M53.8 28.3A22 22 0 0 1 53.8 71.7" fill="none" stroke="${b}" stroke-width="11" stroke-linecap="round"/>`;
+  const marks0 = [
+    { n: "2а", name: "Исходный: белый и лаванда", bg: "#111827", svg: halves("#ffffff", "#a5b4fc") },
+    { n: "2б", name: "Циан и сирень", bg: "#0b1020", svg: halves("#22d3ee", "#a78bfa") },
+    { n: "2в", name: "Белый и лайм", bg: "#0a0a0a", svg: halves("#ffffff", "#bef264") },
+    { n: "2г", name: "Белый и мята", bg: "#0f172a", svg: halves("#ffffff", "#5eead4") },
+    { n: "2д", name: "Белый и оранж", bg: "#111111", svg: halves("#ffffff", "#ff7a3d") },
+    { n: "2е", name: "Белый и розовый", bg: "#141018", svg: halves("#ffffff", "#ff6aa9") },
+    { n: "2ж", name: "Индиго, белый и голубой", bg: "#4338ca", svg: halves("#ffffff", "#a5d8ff") },
+    { n: "2з", name: "Фиолетовый градиент", bg: "linear-gradient(135deg,#8b5cf6,#4338ca)", svg: halves("#ffffff", "#ddd6fe") },
+    { n: "2и", name: "Молочный, чёрный и оранж", bg: "#faf6ef", svg: halves("#111111", "#ff5a1f") },
+    { n: "2к", name: "Белый фон, чёрный и индиго", bg: "#ffffff", svg: halves("#111827", "#6366f1") },
+    { n: "2л", name: "Жёлтый и белый", bg: "#0a0a0a", svg: halves("#ffd60a", "#ffffff") },
+    { n: "2м", name: "Синий электрик", bg: "#1d4ed8", svg: halves("#ffffff", "#93c5fd") },
+  ];
+  // Ring colour and equals colour can differ.
+  const eq = (ring, bars) =>
+    `<circle cx="50" cy="50" r="24" fill="none" stroke="${ring}" stroke-width="8"/>` +
+    `<line x1="41" y1="45" x2="59" y2="45" stroke="${bars}" stroke-width="6" stroke-linecap="round"/>` +
+    `<line x1="41" y1="55" x2="59" y2="55" stroke="${bars}" stroke-width="6" stroke-linecap="round"/>`;
+  const marksEq = [
+    { n: "6а", name: "Исходный: янтарный и тёмный", bg: "#f59e0b", svg: eq("#111827", "#111827") },
+    { n: "6б", name: "Оранжевый и белый", bg: "#ff6a1a", svg: eq("#ffffff", "#ffffff") },
+    { n: "6в", name: "Оранжевый и чёрный", bg: "#ff6a1a", svg: eq("#111111", "#111111") },
+    { n: "6г", name: "Чёрный фон, оранжевый знак", bg: "#0a0a0a", svg: eq("#ff6a1a", "#ff6a1a") },
+    { n: "6д", name: "Чёрный, белое кольцо, оранж. равно", bg: "#0a0a0a", svg: eq("#ffffff", "#ff6a1a") },
+    { n: "6е", name: "Молочный фон, оранжевый знак", bg: "#faf6ef", svg: eq("#ff5a1f", "#ff5a1f") },
+    { n: "6ж", name: "Молочный, чёрное кольцо, оранж. равно", bg: "#faf6ef", svg: eq("#111111", "#ff5a1f") },
+    { n: "6з", name: "Градиент оранж — коралл", bg: "linear-gradient(135deg,#ff8a1f,#ff4d4d)", svg: eq("#ffffff", "#ffffff") },
+    { n: "6и", name: "Мандарин и тёмно-синий", bg: "#ff7a00", svg: eq("#0b1020", "#0b1020") },
+    { n: "6к", name: "Тёмно-синий фон, оранжевый знак", bg: "#0b1020", svg: eq("#ff8a3d", "#ff8a3d") },
+    { n: "6л", name: "Альтернатива: чёрный и лайм", bg: "#0a0a0a", svg: eq("#ffffff", "#bef264") },
+    { n: "6м", name: "Альтернатива: индиго и белый", bg: "#4338ca", svg: eq("#ffffff", "#ffffff") },
+    { n: "6н", name: "Альтернатива: тёмный, циан и сирень", bg: "#0b1020", svg: eq("#22d3ee", "#a78bfa") },
+    { n: "6о", name: "Альтернатива: жёлтый и чёрный", bg: "#ffd60a", svg: eq("#111111", "#111111") },
+  ];
+  const icon = (m, cls) => `<svg class="${cls}" viewBox="0 0 100 100" style="background:${m.bg}">${m.svg}</svg>`;
+  document.getElementById("grid").innerHTML = marks.map((m) => `
+    <div class="card">
+      ${icon(m, "big")}
+      <div class="row">${icon(m, "small")}<span class="word">Zero</span></div>
+      <div class="name"><b>${m.n}.</b> ${m.name}</div>
+    </div>`).join("");
+  document.getElementById("gridEq").innerHTML = marksEq.map((m) => `
+    <div class="card">
+      ${icon(m, "big")}
+      <div class="row">${icon(m, "small")}<span class="word">Zero</span></div>
+      <div class="name"><b>${m.n}.</b> ${m.name}</div>
+    </div>`).join("");
+  document.getElementById("grid0").innerHTML = marks0.map((m) => `
+    <div class="card">
+      ${icon(m, "big")}
+      <div class="row">${icon(m, "small")}<span class="word">Zero</span></div>
+      <div class="name"><b>${m.n}.</b> ${m.name}</div>
+    </div>`).join("");
+  document.getElementById("grid2").innerHTML = marks2.map((m) => `
+    <div class="card">
+      ${icon(m, "big")}
+      <div class="row">${icon(m, "small")}<span class="word">Zero</span></div>
+      <div class="name"><b>${m.n}.</b> ${m.name}</div>
+    </div>`).join("");
+</script>
+</body>
+</html>

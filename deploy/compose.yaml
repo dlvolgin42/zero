@@ -1,0 +1,16 @@
+services:
+  web:
+    build: .
+    image: zero-web
+    restart: unless-stopped
+    env_file: .env
+    # The owner's proxy forwards https://zero.example.com to 127.0.0.1:20080.
+    ports:
+      - "127.0.0.1:20080:3000"
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
