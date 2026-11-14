@@ -1,36 +1,77 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Zero
 
-## Getting Started
+Приложение для общих трат с друзьями: кто платил, как делим, кто кому сколько должен. Работает как сайт и ставится на экран iPhone и Android (PWA). Вход только через Telegram.
 
-First, run the development server:
+- Траты делятся поровну или точными суммами, плательщиков может быть несколько.
+- Много людей, без групп: вместо них необязательный тег.
+- Долги считаются по каждой валюте отдельно (50 валют). Свести в одну валюту можно по курсу через доллар.
+- История изменений «было → стало», голосовой ввод, возврат долга отдельным действием.
+- Друзья по личной ссылке или QR; можно завести человека без аккаунта.
+
+Подробнее о том, что уже сделано и что в планах: [docs/PROJECT-NOTES.md](docs/PROJECT-NOTES.md). Правила работы, git и заливки: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Быстрый старт
+
+Нужны Node.js (свежая версия) и git.
 
 ```bash
+git clone https://github.com/dlvolgin42/zero.git
+cd zero
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Открой http://localhost:3000. Без базы данных приложение предложит **«Войти в демо»**: появятся тестовые друзья и траты. Для работы над интерфейсом этого достаточно. Смотри в размере телефона (около 375 px по ширине).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Проверка сборки перед отправкой кода:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build
+```
 
-## Learn More
+## Из чего сделано
 
-To learn more about Next.js, take a look at the following resources:
+Next.js 16 (App Router), React 19, TypeScript, Tailwind v4, Konsta UI, Postgres 17.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```
+app/
+  page.tsx            весь клиентский интерфейс: экраны, форма траты, шторки
+  api/                серверные маршруты (вход, профиль, друзья, траты, приглашения)
+  join/[code]/        страница, на которую ведёт приглашение
+components/           общие компоненты: шторка, переключатель, голосовая запись
+lib/
+  model.ts            типы, 50 валют, расчёт балансов
+  parse.ts            разбор голосовой фразы
+  demo.ts             данные демо-режима
+  server/             база, сессии, вся логика данных и проверки
+db/migrations/        схема базы (новые изменения только новыми файлами)
+deploy/               сборка контейнеров и скрипт заливки на сервер
+docs/                 заметки по проекту
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Настройки (переменные окружения)
 
-## Deploy on Vercel
+В репозитории секретов нет. Для демо-режима они не нужны.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Переменная | Для чего |
+| --- | --- |
+| `DATABASE_URL` | подключение к Postgres |
+| `APP_URL` | публичный адрес приложения (для возврата из Telegram и ссылок-приглашений) |
+| `TELEGRAM_CLIENT_ID` | идентификатор бота Telegram для входа |
+| `TELEGRAM_CLIENT_SECRET` | секрет бота Telegram, только на сервере |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+На сервере они лежат в файле `.env`. Секрет Telegram и пароль базы никому не пересылаются и в чат не вставляются.
+
+### Настоящая база локально (по желанию, не проверялось)
+
+Если нужно проверить сохранение данных, а не демо: подними Postgres (например, в Docker), примени схему `psql "$DATABASE_URL" -f db/migrations/0001_init.sql` и запусти с `DATABASE_URL=...`. Вход через Telegram локально потребует своего бота с включённым OpenID Connect, поэтому для большинства задач проще демо-режим.
+
+## Заливка на сервер
+
+Скрипт собирает приложение у тебя и отправляет на сервер:
+
+```bash
+./deploy/deploy.sh
+```
+
+Нужен файл `deploy/local.env` с адресом сервера и публичным адресом (образец: `deploy/local.env.example`, самого файла в git нет, значения передаются лично). После заливки проверь, что контейнеры здоровы, в логах нет ошибок и сайт открывается. Подробнее в [CONTRIBUTING.md](CONTRIBUTING.md).
