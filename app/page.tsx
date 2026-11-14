@@ -13,6 +13,7 @@ import {
 } from "@/lib/model";
 import { Draft, parsePhrase } from "@/lib/parse";
 import { avatarUri } from "@/lib/avatar";
+import type { State } from "@/lib/server/data";
 import { BottomSheet } from "@/components/BottomSheet";
 import { PillSegmented } from "@/components/PillSegmented";
 import { VoiceControl } from "@/components/VoiceControl";
@@ -31,6 +32,8 @@ const THEME_KEY = "theme-pref";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const uid = () => Math.random().toString(36).slice(2, 10);
+// Expenses get their id on the device, so saving the same one twice never makes a duplicate.
+const uuid = () => crypto.randomUUID();
 const ruDate = (d: string) => new Date(d).toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
 const detectTheme = (): "ios" | "material" => (/android/i.test(navigator.userAgent) ? "material" : "ios");
 
@@ -148,8 +151,10 @@ function myNet(e: Expense, other?: string): number {
 
 export default function Root() {
   const [stack, setStack] = useState<Screen[]>([{ s: "login" }]);
-  const [people, setPeople] = useState<Person[]>(demoPeople);
-  const [expenses, setExpenses] = useState<Expense[]>(demoExpenses);
+  const [people, setPeople] = useState<Person[]>([{ id: ME, name: "Я", hasAccount: true }]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  // Ids of my friends, in the server's order. null = demo mode, where everybody except me counts as a friend.
+  const [friendIds, setFriendIds] = useState<string[] | null>(null);
   const [nettings, setNettings] = useState<Netting[]>([]);
   const [lastCur, setLastCur] = useState<Cur>("RUB");
   const [addOpen, setAddOpen] = useState(false);
@@ -201,31 +206,65 @@ export default function Root() {
   }, []);
   // Manual friend order, kept on this device (it moves to the database with the real account).
   useEffect(() => {
+    if (authRef.current === "user") return;
     try { const o = JSON.parse(localStorage.getItem("friend-order") ?? "[]"); if (Array.isArray(o)) setFriendOrder(o.filter((x) => typeof x === "string")); } catch {}
-  }, []);
-  // Who is logged in? The cookie is HttpOnly, so only the server can tell.
+  }, [auth === "demo"]); // eslint-disable-line react-hooks/exhaustive-deps
+  const apiCall = async (method: string, url: string, body?: unknown) => {
+    const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
+    if (!r.ok) throw new Error(String(r.status));
+    return r.json().catch(() => null);
+  };
+  const applyState = (st: State) => {
+    // The server calls me "me" with my real name; inside the app I am "Я".
+    setPeople(st.people.map((p) => (p.id === ME ? { ...p, name: "Я" } : p)));
+    setFriendIds(st.friendIds);
+    setFriendOrder(st.manualOrder ? st.friendIds : []);
+    setExpenses(st.expenses);
+    setNettings(st.nettings);
+  };
+  const refresh = async () => {
+    try { applyState((await apiCall("GET", "/api/state")) as State); } catch { notify("Не удалось обновить данные с сервера"); }
+  };
+  const enterDemo = () => {
+    setPeople(demoPeople); setExpenses(demoExpenses); setNettings([]); setFriendIds(null);
+    setStack([{ s: "home" }]);
+  };
+
+  // Who is logged in? The cookie is HttpOnly, so only the server can tell. Checked at start and whenever the user
+  // comes back to the tab (after confirming in the Telegram app on a phone the browser is still waiting in the background).
+  const authRef = useRef(auth);
+  authRef.current = auth;
   useEffect(() => {
     let off = false;
-    (async () => {
+    const boot = async () => {
       try {
         const r = await fetch("/api/me");
         if (off) return;
         if (r.ok) {
-          const me = (await r.json()) as { name: string; avatarSeed: string | null };
+          const me = (await r.json()) as { name: string };
+          const st = (await apiCall("GET", "/api/state")) as State;
+          if (off) return;
+          applyState(st);
           setProfileName(me.name);
-          if (me.avatarSeed) setPeople((ps) => ps.map((x) => (x.id === ME ? { ...x, avatarSeed: me.avatarSeed! } : x)));
           setAuth("user");
           setStack([{ s: "home" }]);
         } else setAuth(r.status === 503 ? "demo" : "anon");
-      } catch { if (!off) setAuth("anon"); }
-    })();
+      } catch { if (!off) { setAuth("anon"); notify("Не удалось загрузить данные. Обнови страницу"); } }
+    };
+    void boot();
+    const onVisible = () => { if (document.visibilityState === "visible" && authRef.current === "anon") void boot(); };
+    document.addEventListener("visibilitychange", onVisible);
     if (new URLSearchParams(location.search).get("login") === "failed") {
       history.replaceState(null, "", location.pathname);
       notify("Не удалось войти через Telegram. Попробуй ещё раз");
     }
-    return () => { off = true; };
+    return () => { off = true; document.removeEventListener("visibilitychange", onVisible); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const reorderFriends = (ids: string[]) => { setFriendOrder(ids); try { localStorage.setItem("friend-order", JSON.stringify(ids)); } catch {} };
+  const reorderFriends = (ids: string[]) => {
+    setFriendOrder(ids);
+    if (auth === "user") void apiCall("PUT", "/api/friends/order", { ids }).catch(() => notify("Не удалось сохранить порядок"));
+    else { try { localStorage.setItem("friend-order", JSON.stringify(ids)); } catch {} }
+  };
   const patchMe = (body: { name?: string; avatarSeed?: string }) =>
     fetch("/api/me", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
   const rename = (n: string) => {
@@ -316,10 +355,16 @@ export default function Root() {
   }, [balances]);
   const tags = [...new Set(expenses.map((e) => e.tag).filter(Boolean))] as string[];
 
-  const addPerson = (n: string) => {
-    const id = uid();
-    setPeople((ps) => [...ps, { id, name: n, hasAccount: false }]);
-    return id;
+  const addPerson = async (n: string): Promise<string> => {
+    if (auth !== "user") {
+      const id = uid();
+      setPeople((ps) => [...ps, { id, name: n, hasAccount: false }]);
+      return id;
+    }
+    const p = (await apiCall("POST", "/api/friends", { name: n })) as Person;
+    setPeople((ps) => [...ps, p]);
+    setFriendIds((f) => [...(f ?? []), p.id]);
+    return p.id;
   };
 
   // Currency of the most recent expense shared with this person.
@@ -329,10 +374,10 @@ export default function Root() {
   // Dictated phrase -> expense. If the phrase has an amount and someone to split with, it is saved at once
   // (with a way to edit it); otherwise the form opens pre-filled with whatever was understood.
   const recordFromVoice = (text: string) => {
-    const d = parsePhrase(text, people, ME, lastCur);
+    const d = parsePhrase(text, formPeople(), ME, lastCur);
     if (d.amount > 0 && d.participantIds.some((id) => id !== d.payerId)) {
       const e: Expense = {
-        id: uid(), title: d.title, amount: d.amount, currency: d.currency, date: today(),
+        id: uuid(), title: d.title, amount: d.amount, currency: d.currency, date: today(),
         payers: [{ personId: d.payerId, amount: d.amount }],
         shares: splitEqual(d.amount, d.participantIds, d.payerId),
         createdBy: ME, source: "voice", deleted: false,
@@ -345,10 +390,24 @@ export default function Root() {
     }
   };
 
+  // Changes show at once and are then sent to the server; if sending fails the state is reloaded from the server.
   const saveExpense = (e: Expense) => {
     setExpenses((list) => (list.some((x) => x.id === e.id) ? list.map((x) => (x.id === e.id ? e : x)) : [e, ...list]));
     setLastCur(e.currency);
+    if (auth !== "user") return;
+    apiCall("PUT", `/api/expenses/${e.id}`, {
+      title: e.title, amount: e.amount, currency: e.currency, date: e.date, payers: e.payers, shares: e.shares, tag: e.tag ?? null, source: e.source,
+    }).then(() => refresh()).catch(() => { notify("Не удалось сохранить трату"); void refresh(); });
   };
+  const markDeleted = (e: Expense, deleted: boolean) => {
+    const entry = { who: "Я", when: today(), text: deleted ? "удалил трату" : "восстановил трату" };
+    setExpenses((list) => list.map((x) => (x.id === e.id ? { ...x, deleted, log: [...x.log, entry] } : x)));
+    if (auth !== "user") return;
+    apiCall("PATCH", `/api/expenses/${e.id}`, { deleted }).then(() => refresh()).catch(() => { notify("Не удалось сохранить изменение"); void refresh(); });
+  };
+  // People who can take part in an expense: me and my friends (plus those already in the expense being edited).
+  const formPeople = (editing?: Expense) => people.filter((p) =>
+    p.id === ME || friendIds === null || friendIds.includes(p.id) || (editing && [...editing.payers, ...editing.shares].some((x) => x.personId === p.id)));
 
   const page = (title: string, body: React.ReactNode, right?: React.ReactNode) => (
     <Page className="pb-40">
@@ -395,10 +454,15 @@ export default function Root() {
         <h1 className="flex justify-center"><Logo className="text-5xl" /></h1>
         <p className={`${muted} mt-2`}>Общие траты с друзьями: кто кому сколько должен</p>
         <Block className="min-h-[5.5rem]">
-          {auth === "anon" && <Button large colors={mainBtn} onClick={() => location.assign("/api/auth/telegram/login")}>Войти через Telegram</Button>}
+          {auth === "anon" && (
+            <>
+              <Button large colors={mainBtn} onClick={() => location.assign("/api/auth/telegram/login")}>Войти через Telegram</Button>
+              <p className={`${muted} mt-2`}>Откроется Telegram: подтверди вход и вернись в браузер</p>
+            </>
+          )}
           {auth === "demo" && (
             <>
-              <Button large colors={mainBtn} onClick={() => setStack([{ s: "home" }])}>Войти в демо</Button>
+              <Button large colors={mainBtn} onClick={enterDemo}>Войти в демо</Button>
               <p className={`${muted} mt-2`}>Здесь нет базы данных, поэтому вход через Telegram недоступен</p>
             </>
           )}
@@ -419,7 +483,9 @@ export default function Root() {
             {nonZero(m).map(([c, v]) => <Fragment key={c}><span>{SYMBOL[c]}</span><span><AnimatedNum v={v} /></span></Fragment>)}
           </div>
         );
-    const friends = people.filter((p) => p.id !== ME);
+    const friends = friendIds
+      ? (friendIds.map((id) => people.find((p) => p.id === id)).filter(Boolean) as Person[])
+      : people.filter((p) => p.id !== ME);
     const hasDebt = (p: Person) => nonZero(balances[p.id]).length > 0;
     // Default: friends with a balance first. Once the user has dragged rows, their order wins; new friends go to the end.
     const byDebt = [...friends.filter(hasDebt), ...friends.filter((p) => !hasDebt(p))];
@@ -441,9 +507,17 @@ export default function Root() {
           </div>
         </div>
         <BlockTitle>Друзья</BlockTitle>
+        {friends.length === 0 ? (
+          <div className="mx-4 rounded-2xl bg-white p-5 text-center">
+            <p className="text-base font-medium">Пока никого нет</p>
+            <p className={`${muted} mt-1`}>Добавь человека, с которым делишь траты. Можно даже без аккаунта, например «Саша».</p>
+            <button className="mt-4 h-11 rounded-full bg-[#111827] px-5 font-medium text-white active:opacity-80" onClick={() => { setAddCb(null); setAddOpen(true); }}>Добавить человека</button>
+          </div>
+        ) : (
         <FriendList friends={sorted} balances={balances} changes={changes}
-          onTap={(p) => openForm({ source: "manual", draft: { title: "", amount: 0, currency: lastCurWith(p.id) ?? lastCur, payerId: ME, participantIds: [ME, p.id] } })}
-          onOpen={(p) => go({ s: "friend", id: p.id })} onReorder={reorderFriends} />
+            onTap={(p) => openForm({ source: "manual", draft: { title: "", amount: 0, currency: lastCurWith(p.id) ?? lastCur, payerId: ME, participantIds: [ME, p.id] } })}
+            onOpen={(p) => go({ s: "friend", id: p.id })} onReorder={reorderFriends} />
+        )}
         {bar()}
       </Page>
     );
@@ -471,8 +545,7 @@ export default function Root() {
     </>);
   } else if (screen.s === "expense") {
     const e = expenses.find((x) => x.id === screen.id)!;
-    const toggleDeleted = () =>
-      saveExpense({ ...e, deleted: !e.deleted, log: [...e.log, { who: "Я", when: today(), text: e.deleted ? "восстановил трату" : "удалил трату" }] });
+    const toggleDeleted = () => markDeleted(e, !e.deleted);
     const parts = (list: Expense["payers"]) => (
       <List strong inset dividers>{list.map((p) => <ListItem key={p.personId} title={name(p.personId)} after={fmt(p.amount, e.currency)} />)}</List>
     );
@@ -493,10 +566,14 @@ export default function Root() {
   } else if (screen.s === "net") {
     content = page(`Взаимозачёт: ${name(screen.id)}`,
       <NetForm bal={balances[screen.id] ?? {}} onApply={(items) => {
-        setNettings((ns) => [...ns, ...items.map(({ sign, ...it }) => ({
-          id: uid(), date: today(), ...it,
+        const made = items.map(({ sign, ...it }) => ({
+          id: uuid(), date: today(), ...it,
           debtor: sign > 0 ? screen.id : ME, creditor: sign > 0 ? ME : screen.id,
-        }))]);
+        }));
+        setNettings((ns) => [...ns, ...made]);
+        if (auth === "user") {
+          Promise.all(made.map((n) => apiCall("POST", "/api/nettings", n))).then(() => refresh()).catch(() => { notify("Не удалось сохранить взаимозачёт"); void refresh(); });
+        }
         back();
       }} />);
   } else if (screen.s === "history") {
@@ -538,7 +615,7 @@ export default function Root() {
       <BottomSheet open={formOpen} onClose={() => setFormOpen(false)} title={editingExp ? "Изменить трату" : "Новая трата"}>
         {form && (
           <ExpenseForm
-            key={form.key} people={people} tags={tags} editing={editingExp} lastCurWith={lastCurWith} draft={form.draft} defaultCur={lastCur}
+            key={form.key} people={formPeople(editingExp)} tags={tags} editing={editingExp} lastCurWith={lastCurWith} draft={form.draft} defaultCur={lastCur}
             requestAddPerson={(cb) => { setAddCb(() => cb); setAddOpen(true); }}
             onSave={(data) => {
               if (editingExp) {
@@ -550,7 +627,7 @@ export default function Root() {
                 if ((editingExp.tag ?? "") !== (data.tag ?? "")) changes.push("тег");
                 saveExpense({ ...editingExp, ...data, log: [...editingExp.log, { who: "Я", when: today(), text: `изменил: ${changes.join(", ") || "без изменений"}` }] });
               } else {
-                saveExpense({ ...data, id: uid(), createdBy: ME, source: form.source, deleted: false, log: [{ who: "Я", when: today(), text: form.source === "voice" ? "внёс трату голосом" : "внёс трату" }] });
+                saveExpense({ ...data, id: uuid(), createdBy: ME, source: form.source, deleted: false, log: [{ who: "Я", when: today(), text: form.source === "voice" ? "внёс трату голосом" : "внёс трату" }] });
               }
               setFormOpen(false);
             }}
@@ -585,7 +662,7 @@ export default function Root() {
           </button>
         </div>
       </BottomSheet>
-      <AddPersonSheet open={addOpen} onClose={() => setAddOpen(false)} onAdd={(n) => { const id = addPerson(n); addCb?.(id); }} />
+      <AddPersonSheet open={addOpen} onClose={() => setAddOpen(false)} onAdd={(n) => { void addPerson(n).then((id) => addCb?.(id)).catch(() => notify("Не удалось добавить человека")); }} />
       <Actions opened={menuOpen} onBackdropClick={() => setMenuOpen(false)}>
         <ActionsGroup>
           <ActionsLabel>{profileName || "Профиль"}</ActionsLabel>
@@ -851,6 +928,7 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
   const error =
     amount <= 0 ? "Введи сумму" :
     ids.length === 0 ? "Выбери, на кого делим" :
+    !ids.includes(ME) && payerId !== ME ? "Ты сам должен участвовать: платить или быть в долях" :
     ids.length === 1 && ids[0] === payerId ? "Добавь хотя бы одного человека, кроме плательщика" :
     mode === "exact" && sum !== amount ? `Доли в сумме дают ${fmt(sum, currency)}, а трата ${fmt(amount, currency)}` : "";
 
