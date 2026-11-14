@@ -16,16 +16,20 @@ cp -R .next/static .deploy/build/static
 cp -R public/. .deploy/build/public/
 rm -f .deploy/build/public/logo-options.html
 cp deploy/Dockerfile deploy/compose.yaml .deploy/
+cp -R db .deploy/db
 
 ssh "$HOST" 'mkdir -p ~/app'
 # --checksum: send a file only if its content changed (build tools rewrite timestamps every time).
-# --exclude=.env: the server's secrets stay untouched and are never deleted.
-rsync -az --delete --checksum --stats --exclude=.env -e ssh .deploy/ "$HOST":app/
+# --exclude=.env and backups/: the server's secrets and database dumps stay untouched and are never deleted.
+rsync -az --delete --checksum --stats --exclude=.env --exclude=backups/ -e ssh .deploy/ "$HOST":app/
 
 ssh "$HOST" '
   set -e
   cd ~/app
   touch .env && chmod 600 .env
+  # The database password is created once, on the server, and never leaves it.
+  grep -q "^POSTGRES_PASSWORD=" .env || printf "POSTGRES_PASSWORD=%s\n" "$(head -c 24 /dev/urandom | od -An -tx1 | tr -d " \n")" >> .env
+  mkdir -p backups
   docker compose up -d --build
   docker image prune -f >/dev/null
   docker compose ps
