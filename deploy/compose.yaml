@@ -7,6 +7,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgres://zero:${POSTGRES_PASSWORD}@db:5432/zero
+      APP_URL: https://zero.example.com
     # The owner's proxy forwards https://zero.example.com to 127.0.0.1:20080.
     ports:
       - "127.0.0.1:20080:3000"
@@ -17,7 +18,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    # Once the app really uses the database, add: depends_on: { migrate: { condition: service_completed_successfully } }
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
   db:
     image: postgres:17-alpine

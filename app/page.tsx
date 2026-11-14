@@ -165,6 +165,10 @@ export default function Root() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [recActive, setRecActive] = useState(false);
   const [profileName, setProfileName] = useState("Дмитрий");
+  // "loading": asking the server who we are; "anon": not logged in; "user": logged in with Telegram;
+  // "demo": the server has no database (local development), so the old demo login is offered.
+  const [auth, setAuth] = useState<"loading" | "anon" | "user" | "demo">("loading");
+  const nameTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [friendOrder, setFriendOrder] = useState<string[]>([]);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [avatarSeeds, setAvatarSeeds] = useState<string[]>([]);
@@ -199,12 +203,48 @@ export default function Root() {
   useEffect(() => {
     try { const o = JSON.parse(localStorage.getItem("friend-order") ?? "[]"); if (Array.isArray(o)) setFriendOrder(o.filter((x) => typeof x === "string")); } catch {}
   }, []);
+  // Who is logged in? The cookie is HttpOnly, so only the server can tell.
+  useEffect(() => {
+    let off = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/me");
+        if (off) return;
+        if (r.ok) {
+          const me = (await r.json()) as { name: string; avatarSeed: string | null };
+          setProfileName(me.name);
+          if (me.avatarSeed) setPeople((ps) => ps.map((x) => (x.id === ME ? { ...x, avatarSeed: me.avatarSeed! } : x)));
+          setAuth("user");
+          setStack([{ s: "home" }]);
+        } else setAuth(r.status === 503 ? "demo" : "anon");
+      } catch { if (!off) setAuth("anon"); }
+    })();
+    if (new URLSearchParams(location.search).get("login") === "failed") {
+      history.replaceState(null, "", location.pathname);
+      notify("Не удалось войти через Telegram. Попробуй ещё раз");
+    }
+    return () => { off = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const reorderFriends = (ids: string[]) => { setFriendOrder(ids); try { localStorage.setItem("friend-order", JSON.stringify(ids)); } catch {} };
-  const rename = (n: string) => { setProfileName(n); try { localStorage.setItem("profile-name", n); } catch {} };
+  const patchMe = (body: { name?: string; avatarSeed?: string }) =>
+    fetch("/api/me", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
+  const rename = (n: string) => {
+    setProfileName(n);
+    if (auth === "user") {
+      if (nameTimer.current) clearTimeout(nameTimer.current);
+      if (n.trim()) nameTimer.current = setTimeout(() => void patchMe({ name: n }), 600);
+    } else { try { localStorage.setItem("profile-name", n); } catch {} }
+  };
   const pickAvatar = (seed: string) => {
     setPeople((ps) => ps.map((x) => (x.id === ME ? { ...x, avatarSeed: seed } : x)));
-    try { localStorage.setItem("avatar-seed", seed); } catch {}
+    if (auth === "user") void patchMe({ avatarSeed: seed });
+    else { try { localStorage.setItem("avatar-seed", seed); } catch {} }
     setAvatarOpen(false);
+  };
+  const logout = async () => {
+    if (auth === "user") { try { await fetch("/api/auth/logout", { method: "POST" }); } catch {} setAuth("anon"); }
+    depth.current = 0;
+    setStack([{ s: "login" }]);
   };
   const freshSeeds = (keep: string) => [keep, ...Array.from({ length: 11 }, () => Math.random().toString(36).slice(2, 10))];
   const openAvatarPicker = () => { setAvatarSeeds(freshSeeds(people.find((x) => x.id === ME)?.avatarSeed ?? ME)); setAvatarOpen(true); };
@@ -354,7 +394,15 @@ export default function Root() {
       <Page className="flex flex-col justify-center text-center">
         <h1 className="flex justify-center"><Logo className="text-5xl" /></h1>
         <p className={`${muted} mt-2`}>Общие траты с друзьями: кто кому сколько должен</p>
-        <Block><Button large colors={mainBtn} onClick={() => setStack([{ s: "home" }])}>Войти через Telegram</Button></Block>
+        <Block className="min-h-[5.5rem]">
+          {auth === "anon" && <Button large colors={mainBtn} onClick={() => location.assign("/api/auth/telegram/login")}>Войти через Telegram</Button>}
+          {auth === "demo" && (
+            <>
+              <Button large colors={mainBtn} onClick={() => setStack([{ s: "home" }])}>Войти в демо</Button>
+              <p className={`${muted} mt-2`}>Здесь нет базы данных, поэтому вход через Telegram недоступен</p>
+            </>
+          )}
+        </Block>
       </Page>
     );
   } else if (screen.s === "home") {
@@ -477,7 +525,7 @@ export default function Root() {
           <p className={`${muted} mt-3`}>Авто: на Android — вид Android, на остальных устройствах — вид iOS.</p>
         </div>
 
-        <button className="h-12 w-full rounded-2xl bg-white font-medium text-[#E0245E] active:bg-black/5" onClick={() => setStack([{ s: "login" }])}>Выйти</button>
+        <button className="h-12 w-full rounded-2xl bg-white font-medium text-[#E0245E] active:bg-black/5" onClick={() => void logout()}>Выйти</button>
       </div>
     ));
   }
