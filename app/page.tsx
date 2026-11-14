@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, Check, Pencil, Send, Shuffle, ChevronDown, ChevronRight, Copy, Delete, Hash, Mic, Search, Plus, UserPlus, X } from "lucide-react";
+import { CalendarDays, Check, HandCoins, Send, Shuffle, ChevronDown, ChevronRight, Copy, Delete, Hash, Mic, Search, Plus, UserPlus, X } from "lucide-react";
 import {
   Actions, ActionsButton, ActionsGroup, ActionsLabel, App, Block, BlockTitle, Button, Chip, Link, List, ListInput, ListItem,
   Navbar, NavbarBackLink, Page, Segmented, SegmentedButton,
@@ -114,7 +114,7 @@ function Face({ person, className = "size-10" }: { person: Person; className?: s
 
 function BalanceLines({ m, ch }: { m: CurMap | undefined; ch?: CurMap }) {
   const items = nonZero(m);
-  if (items.length === 0) return <span className="opacity-55">в расчёте</span>;
+  if (items.length === 0) return null;
   return <div className="text-right">{items.map(([c, v]) => <div key={c}><AnimatedMoney v={v} cur={c} from={ch?.[c] ? v - ch[c]! : undefined} /></div>)}</div>;
 }
 
@@ -135,7 +135,8 @@ function Chips<T extends string>({ options, selected, onPick, extra }: {
 // All currencies on one line, so every friend row has the same height.
 function BalanceInline({ m, ch }: { m: CurMap | undefined; ch?: CurMap }) {
   const items = nonZero(m);
-  if (items.length === 0) return <span className="opacity-55">в расчёте</span>;
+  // Nothing to show, but the row keeps its height so all friend rows stay equal.
+  if (items.length === 0) return <span aria-hidden className="invisible">0</span>;
   return <span className="flex gap-x-3 overflow-hidden whitespace-nowrap">{items.map(([c, v]) => <AnimatedMoney key={c} v={v} cur={c} from={ch?.[c] ? v - ch[c]! : undefined} />)}</span>;
 }
 
@@ -156,8 +157,16 @@ export default function Root() {
   // Ids of my friends, in the server's order. null = demo mode, where everybody except me counts as a friend.
   const [friendIds, setFriendIds] = useState<string[] | null>(null);
   const [nettings, setNettings] = useState<Netting[]>([]);
-  const [lastCur, setLastCur] = useState<Cur>("RUB");
+  // Currency a new expense starts with (a friend's last shared currency wins). Chosen in Settings, kept on this device.
+  const [defaultCur, setDefaultCur] = useState<Cur>("RUB");
+  useEffect(() => {
+    try { const c = localStorage.getItem("default-cur"); if (c && (CURS as string[]).includes(c)) setDefaultCur(c as Cur); } catch {}
+  }, []);
+  const chooseDefaultCur = (c: Cur) => { setDefaultCur(c); try { localStorage.setItem("default-cur", c); } catch {} };
   const [addOpen, setAddOpen] = useState(false);
+  // "Return a debt" sheet, opened from a friend's page.
+  const [settleWith, setSettleWith] = useState<Person | null>(null);
+  const [settleOpen, setSettleOpen] = useState(false);
   // Called with the new person's id when "add person" was opened from the expense form.
   const [addCb, setAddCb] = useState<((id: string) => void) | null>(null);
   // The expense form lives in a bottom sheet over the current screen.
@@ -377,7 +386,7 @@ export default function Root() {
   // Dictated phrase -> expense. If the phrase has an amount and someone to split with, it is saved at once
   // (with a way to edit it); otherwise the form opens pre-filled with whatever was understood.
   const recordFromVoice = (text: string) => {
-    const d = parsePhrase(text, formPeople(), ME, lastCur);
+    const d = parsePhrase(text, formPeople(), ME, defaultCur);
     if (d.amount > 0 && d.participantIds.some((id) => id !== d.payerId)) {
       const e: Expense = {
         id: uuid(), title: d.title, amount: d.amount, currency: d.currency, date: today(),
@@ -396,7 +405,6 @@ export default function Root() {
   // Changes show at once and are then sent to the server; if sending fails the state is reloaded from the server.
   const saveExpense = (e: Expense) => {
     setExpenses((list) => (list.some((x) => x.id === e.id) ? list.map((x) => (x.id === e.id ? e : x)) : [e, ...list]));
-    setLastCur(e.currency);
     if (auth !== "user") return;
     apiCall("PUT", `/api/expenses/${e.id}`, {
       title: e.title, amount: e.amount, currency: e.currency, date: e.date, payers: e.payers, shares: e.shares, tag: e.tag ?? null, source: e.source,
@@ -518,7 +526,7 @@ export default function Root() {
           </div>
         ) : (
         <FriendList friends={sorted} balances={balances} changes={changes}
-            onTap={(p) => openForm({ source: "manual", draft: { title: "", amount: 0, currency: lastCurWith(p.id) ?? lastCur, payerId: ME, participantIds: [ME, p.id] } })}
+            onTap={(p) => openForm({ source: "manual", draft: { title: "", amount: 0, currency: lastCurWith(p.id) ?? defaultCur, payerId: ME, participantIds: [ME, p.id] } })}
             onOpen={(p) => go({ s: "friend", id: p.id })} onReorder={reorderFriends} />
         )}
         {bar()}
@@ -531,6 +539,10 @@ export default function Root() {
       <Block strong inset>
         <div className={muted}>Баланс</div>
         <div className="relative text-left text-2xl font-semibold [&>div]:text-left"><BalanceLines m={balances[p.id]} ch={changes[p.id]} /></div>
+        <button className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#111827] font-medium text-white active:opacity-80"
+          onClick={() => { setSettleWith(p); setSettleOpen(true); }}>
+          <HandCoins className="size-5" />Вернуть долг
+        </button>
         {nonZero(balances[p.id]).length > 1 && <Button tonal colors={tonalBtn} large className="mt-3" onClick={() => go({ s: "net", id: p.id })}>Свести в одну валюту</Button>}
       </Block>
       {!p.hasAccount && (
@@ -544,7 +556,7 @@ export default function Root() {
         {list.length === 0 && <ListItem title="Пока ничего" />}
         {list.map((e) => expenseItem(e, p.id))}
       </List>
-      {bar({ title: "", amount: 0, currency: lastCurWith(p.id) ?? lastCur, payerId: ME, participantIds: [ME, p.id] })}
+      {bar({ title: "", amount: 0, currency: lastCurWith(p.id) ?? defaultCur, payerId: ME, participantIds: [ME, p.id] })}
     </>);
   } else if (screen.s === "expense") {
     const e = expenses.find((x) => x.id === screen.id)!;
@@ -587,16 +599,21 @@ export default function Root() {
     content = page("Настройки", (
       <div className="space-y-3 px-4 pt-2 text-[#111827]">
         <div className={`${card} flex flex-col items-center pt-6 pb-5`}>
-          <button className="relative" aria-label="Сменить аватарку" onClick={openAvatarPicker}>
+          <button className="relative" aria-label="Выбрать аватарку" onClick={openAvatarPicker}>
             <Face person={meP} className="size-24" />
-            <span className="absolute -right-1 -bottom-1 grid size-8 place-items-center rounded-full bg-[#a5b4fc] text-[#111827] shadow-md ring-2 ring-white"><Pencil className="size-4" /></span>
           </button>
           <input aria-label="Имя" value={profileName} onChange={(e) => rename(e.target.value)} maxLength={24} placeholder="Твоё имя"
             className="mt-4 w-full bg-transparent text-center text-2xl font-semibold outline-none placeholder:opacity-35" />
           <div className="mt-1 flex items-center gap-1.5 text-sm opacity-55"><Send className="size-3.5" />Вход через Telegram</div>
-          <button className="mt-4 flex h-10 items-center gap-2 rounded-full bg-black/5 px-4 text-[15px] font-medium active:bg-black/10" onClick={openAvatarPicker}>
-            <Shuffle className="size-4" />Сменить аватарку
-          </button>
+        </div>
+
+        <div className={card}>
+          <div className="mb-3 text-sm opacity-55">Валюта по умолчанию</div>
+          <select aria-label="Валюта по умолчанию" value={defaultCur} onChange={(e) => chooseDefaultCur(e.target.value as Cur)}
+            className="h-12 w-full rounded-2xl bg-black/5 px-4 text-base outline-none">
+            {CURS.map((c) => <option key={c} value={c}>{SYMBOL[c]} {c} · {CUR_INFO[c].name}</option>)}
+          </select>
+          <p className={`${muted} mt-3`}>С неё начинается новая трата. Если с другом уже были траты в другой валюте, предложим её.</p>
         </div>
 
         <div className={card}>
@@ -618,7 +635,7 @@ export default function Root() {
       <BottomSheet open={formOpen} onClose={() => setFormOpen(false)} title={editingExp ? "Изменить трату" : "Новая трата"}>
         {form && (
           <ExpenseForm
-            key={form.key} people={formPeople(editingExp)} tags={tags} editing={editingExp} lastCurWith={lastCurWith} draft={form.draft} defaultCur={lastCur}
+            key={form.key} people={formPeople(editingExp)} tags={tags} editing={editingExp} lastCurWith={lastCurWith} draft={form.draft} defaultCur={defaultCur}
             requestAddPerson={(cb) => { setAddCb(() => cb); setAddOpen(true); }}
             onSave={(data) => {
               if (editingExp) {
@@ -665,6 +682,16 @@ export default function Root() {
           </button>
         </div>
       </BottomSheet>
+      <SettleSheet open={settleOpen} onClose={() => setSettleOpen(false)} friend={settleWith} balance={settleWith ? balances[settleWith.id] : undefined}
+        defaultCur={defaultCur}
+        onSave={(giver, receiver, amount, currency) => {
+          saveExpense({
+            id: uuid(), title: "Возврат долга", amount, currency, date: today(),
+            payers: [{ personId: giver, amount }], shares: [{ personId: receiver, amount }],
+            createdBy: ME, source: "manual", deleted: false, log: [{ who: "Я", when: today(), text: "записал возврат долга" }],
+          });
+          setSettleOpen(false);
+        }} />
       <AddPersonSheet open={addOpen} onClose={() => setAddOpen(false)} getInviteUrl={getInviteUrl} onAdd={(n) => { void addPerson(n).then((id) => addCb?.(id)).catch(() => notify("Не удалось добавить человека")); }} />
       <Actions opened={menuOpen} onBackdropClick={() => setMenuOpen(false)}>
         <ActionsGroup>
@@ -903,6 +930,74 @@ function AddPersonSheet({ open, onClose, onAdd, getInviteUrl }: {
       </div>
 
       <p className={`${muted} mx-4 mb-4 mt-3 px-1`}>Поиск по нику в Telegram появится позже.</p>
+    </BottomSheet>
+  );
+}
+
+// A repayment is its own flow: one person hands money to the other. It is stored as an expense where the giver
+// paid and the receiver carries the whole share, so balances and history work without special cases.
+function SettleSheet({ open, onClose, friend, balance, defaultCur, onSave }: {
+  open: boolean; onClose: () => void; friend: Person | null; balance: CurMap | undefined; defaultCur: Cur;
+  onSave: (giver: string, receiver: string, amount: number, currency: Cur) => void;
+}) {
+  const [cur, setCur] = useState<Cur>(defaultCur);
+  const [give, setGive] = useState(true); // true: I give the money back, false: the friend gives it to me
+  const [amountStr, setAmountStr] = useState("");
+
+  // Start from the biggest open debt with this friend; with none, from the default currency.
+  useEffect(() => {
+    if (!open || !friend) return;
+    const debts = nonZero(balance);
+    if (debts.length === 0) { setCur(defaultCur); setGive(true); setAmountStr(""); return; }
+    const [c, v] = [...debts].sort((a, b) => Math.abs(b[1]) / CUR_INFO[b[0]].rate - Math.abs(a[1]) / CUR_INFO[a[0]].rate)[0];
+    setCur(c); setGive(v < 0); setAmountStr(String(Math.abs(v) / 100));
+  }, [open, friend?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!friend) return null;
+  const debt = balance?.[cur] ?? 0; // > 0: the friend owes me
+  const toMinor = (x: string) => Math.round(parseFloat((x || "0").replace(",", ".")) * 100) || 0;
+  const amount = toMinor(amountStr);
+  const pickCur = (c: Cur) => {
+    setCur(c);
+    const v = balance?.[c] ?? 0;
+    if (v !== 0) { setGive(v < 0); setAmountStr(String(Math.abs(v) / 100)); }
+  };
+  const hint = debt > 0 ? `${friend.name} должен тебе ${fmt(debt, cur)}` : debt < 0 ? `Твой долг: ${fmt(-debt, cur)}` : "В этой валюте долга нет";
+  const debtCurs = nonZero(balance).map(([c]) => c);
+  const curList = [...debtCurs, ...CURS.filter((c) => !debtCurs.includes(c))];
+
+  return (
+    <BottomSheet open={open} onClose={onClose} title="Вернуть долг" z={60}>
+      <div className="mx-4 mt-3 space-y-3 text-[#111827]">
+        <div className="flex items-center gap-3 rounded-2xl bg-white p-4">
+          <Face person={friend} className="size-12" />
+          <div className="min-w-0">
+            <div className="truncate text-lg font-medium">{friend.name}</div>
+            <div className={muted}>{hint}</div>
+          </div>
+        </div>
+
+        <PillSegmented value={give ? "give" : "take"} onChange={(v) => setGive(v === "give")}
+          options={[{ value: "give", label: "Я отдаю" }, { value: "take", label: "Мне отдают" }]} />
+
+        <div className="rounded-2xl bg-white p-4">
+          <div className="mb-2 text-sm opacity-55">{give ? "Сумма, которую ты отдаёшь" : `Сумма, которую отдаёт ${friend.name}`}</div>
+          <div className="flex gap-2">
+            <input inputMode="decimal" value={amountStr} onChange={(e) => setAmountStr(e.target.value.replace(/[^\d.,]/g, ""))} placeholder="0"
+              className="h-14 min-w-0 flex-1 rounded-2xl bg-black/5 px-4 text-2xl font-semibold tabular-nums outline-none" />
+            <select aria-label="Валюта" value={cur} onChange={(e) => pickCur(e.target.value as Cur)}
+              className="h-14 w-28 rounded-2xl bg-black/5 px-3 text-base outline-none">
+              {curList.map((c) => <option key={c} value={c}>{SYMBOL[c]} {c}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <button disabled={amount <= 0} onClick={() => onSave(give ? ME : friend.id, give ? friend.id : ME, amount, cur)}
+          className="h-12 w-full rounded-2xl bg-[#111827] font-medium text-white active:opacity-80 disabled:opacity-40">
+          {amount > 0 ? `Записать ${fmt(amount, cur)}` : "Записать возврат"}
+        </button>
+        <p className={`${muted} px-1 pb-4`}>Это не трата: просто деньги вернулись, и баланс изменится на эту сумму.</p>
+      </div>
     </BottomSheet>
   );
 }
