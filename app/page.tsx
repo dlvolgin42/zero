@@ -459,7 +459,7 @@ export default function Root() {
         <Block className="min-h-[5.5rem]">
           {auth === "anon" && (
             <>
-              <Button large colors={mainBtn} onClick={() => location.assign("/api/auth/telegram/login")}>Войти через Telegram</Button>
+              <Button large colors={mainBtn} onClick={() => { const inv = new URLSearchParams(location.search).get("invite"); location.assign(`/api/auth/telegram/login${inv ? `?invite=${encodeURIComponent(inv)}` : ""}`); }}>Войти через Telegram</Button>
               <p className={`${muted} mt-2`}>Откроется Telegram: подтверди вход и вернись в браузер</p>
             </>
           )}

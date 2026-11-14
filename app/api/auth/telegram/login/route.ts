@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     try {
       const profile = await currentProfile(saved);
       if (profile) {
-        const invite = request.cookies.get(INVITE_COOKIE)?.value;
+        const invite = request.nextUrl.searchParams.get("invite") ?? request.cookies.get(INVITE_COOKIE)?.value;
         if (invite) { await acceptInvite(invite, profile.id).catch(() => {}); }
         const back = NextResponse.redirect(`${appUrl()}/`);
         back.cookies.set(SESSION_COOKIE, saved, { httpOnly: true, secure: isProd, sameSite: "lax", path: "/", maxAge: SESSION_DAYS * 86400 });
@@ -42,7 +42,8 @@ export async function GET(request: NextRequest) {
   }).toString();
 
   const res = NextResponse.redirect(url);
-  res.cookies.set("tg_oauth", JSON.stringify({ state, verifier }), {
+  const invite = request.nextUrl.searchParams.get("invite") ?? request.cookies.get(INVITE_COOKIE)?.value ?? null;
+  res.cookies.set("tg_oauth", JSON.stringify({ state, verifier, invite }), {
     httpOnly: true, secure: isProd, sameSite: "lax", path: "/api/auth/telegram", maxAge: 600,
   });
   return res;

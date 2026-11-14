@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
   };
   try {
     const clientId = process.env.TELEGRAM_CLIENT_ID, secret = process.env.TELEGRAM_CLIENT_SECRET;
-    const saved = JSON.parse(savedRaw ?? "null") as { state: string; verifier: string } | null;
+    const saved = JSON.parse(savedRaw ?? "null") as { state: string; verifier: string; invite?: string | null } | null;
     if (!clientId || !secret || !code || !state || !saved || saved.state !== state) return back(false);
 
     const tokenRes = await fetch(`${ISSUER}/token`, {
@@ -52,7 +52,8 @@ export async function GET(request: NextRequest) {
       username: typeof payload.preferred_username === "string" ? payload.preferred_username : null,
     });
     const token = await createSession(personId, userAgent);
-    if (invite) await acceptInvite(invite, personId).catch((e) => console.error("accept invite failed:", e instanceof Error ? e.message : e));
+    const inviteCode = saved.invite ?? invite;
+    if (inviteCode && /^[\w-]{6,40}$/.test(inviteCode)) await acceptInvite(inviteCode, personId).catch((e) => console.error("accept invite failed:", e instanceof Error ? e.message : e));
 
     const res = back(true);
     res.cookies.set(SESSION_COOKIE, token, { httpOnly: true, secure: isProd, sameSite: "lax", path: "/", maxAge: SESSION_DAYS * 86400 });
