@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { db } from "./db";
 
 export const SESSION_COOKIE = "zero_session";
+export const SAVED_COOKIE = "zero_saved"; // session token parked here on logout, so the next login needs no Telegram
 export const SESSION_DAYS = 60;
 export const isProd = process.env.NODE_ENV === "production";
 

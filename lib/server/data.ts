@@ -263,3 +263,30 @@ export async function createNetting(me: string, input: NettingInput): Promise<vo
     insert into nettings (debtor_id, creditor_id, from_currency, from_minor, to_currency, to_minor, rate, made_on, created_by)
     values (${debtor}, ${creditor}, ${input.fromCur}, ${input.fromAmount}, ${input.toCur}, ${input.toAmount}, ${rate}, ${input.date}, ${me})`;
 }
+
+export const INVITE_COOKIE = "zero_invite";
+
+// My personal invite link code: one reusable code per person, created on first use.
+export async function myInviteCode(me: string): Promise<{ code: string }> {
+  const sql = db();
+  const found = await sql<{ code: string }[]>`
+    select code from invites where inviter_id = ${me} and ghost_id is null and used_by is null order by created_at limit 1`;
+  if (found[0]) return { code: found[0].code };
+  const code = randomToken(9);
+  await sql`insert into invites (code, inviter_id) values (${code}, ${me})`;
+  return { code };
+}
+
+// Someone opened an invite link and is logged in: make both people friends. Safe to repeat.
+// Invites tied to a placeholder person (ghost_id) are not claimed yet; they only connect the two people.
+export async function acceptInvite(code: string, me: string): Promise<void> {
+  const sql = db();
+  const rows = await sql<{ inviter_id: string }[]>`
+    select inviter_id from invites where code = ${code} and (expires_at is null or expires_at > now())`;
+  const inviter = rows[0]?.inviter_id;
+  if (!inviter || inviter === me) return;
+  await sql.begin(async (tx) => {
+    await tx`insert into friend_links (owner_id, friend_id) values (${me}, ${inviter}), (${inviter}, ${me}) on conflict do nothing`;
+    await tx`update invites set used_at = coalesce(used_at, now()) where code = ${code}`;
+  });
+}

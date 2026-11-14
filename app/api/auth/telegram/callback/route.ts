@@ -1,5 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { NextResponse, type NextRequest } from "next/server";
+import { INVITE_COOKIE, acceptInvite } from "@/lib/server/data";
 import { SESSION_COOKIE, SESSION_DAYS, appUrl, createSession, isProd, personForTelegram } from "@/lib/server/auth";
 
 const ISSUER = "https://oauth.telegram.org";
@@ -13,10 +14,12 @@ export async function GET(request: NextRequest) {
   const code = params.get("code"), state = params.get("state");
   const savedRaw = request.cookies.get("tg_oauth")?.value;
   const userAgent = request.headers.get("user-agent");
+  const invite = request.cookies.get(INVITE_COOKIE)?.value;
 
   const back = (ok: boolean) => {
     const res = NextResponse.redirect(`${appUrl()}/${ok ? "" : "?login=failed"}`);
     res.cookies.delete({ name: "tg_oauth", path: "/api/auth/telegram" });
+    if (ok) res.cookies.delete({ name: INVITE_COOKIE, path: "/" });
     return res;
   };
   try {
@@ -49,6 +52,7 @@ export async function GET(request: NextRequest) {
       username: typeof payload.preferred_username === "string" ? payload.preferred_username : null,
     });
     const token = await createSession(personId, userAgent);
+    if (invite) await acceptInvite(invite, personId).catch((e) => console.error("accept invite failed:", e instanceof Error ? e.message : e));
 
     const res = back(true);
     res.cookies.set(SESSION_COOKIE, token, { httpOnly: true, secure: isProd, sameSite: "lax", path: "/", maxAge: SESSION_DAYS * 86400 });

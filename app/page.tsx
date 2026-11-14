@@ -214,6 +214,9 @@ export default function Root() {
     if (!r.ok) throw new Error(String(r.status));
     return r.json().catch(() => null);
   };
+  // Real link from the server; demo mode has no server, so it gets a sample link.
+  const getInviteUrl = async (): Promise<string> =>
+    authRef.current === "user" ? ((await apiCall("GET", "/api/invite")) as { url: string }).url : `${location.origin}/join/demo`;
   const applyState = (st: State) => {
     // The server calls me "me" with my real name; inside the app I am "Я".
     setPeople(st.people.map((p) => (p.id === ME ? { ...p, name: "Я" } : p)));
@@ -506,7 +509,7 @@ export default function Root() {
             <div className="min-h-[4.5rem] flex-1 rounded-2xl bg-white p-4">{totals(owe, neg)}</div>
           </div>
         </div>
-        <BlockTitle>Друзья</BlockTitle>
+        <div className="mx-4 mb-1.5 mt-6 px-1 text-sm opacity-55">Друзья</div>
         {friends.length === 0 ? (
           <div className="mx-4 rounded-2xl bg-white p-5 text-center">
             <p className="text-base font-medium">Пока никого нет</p>
@@ -662,7 +665,7 @@ export default function Root() {
           </button>
         </div>
       </BottomSheet>
-      <AddPersonSheet open={addOpen} onClose={() => setAddOpen(false)} onAdd={(n) => { void addPerson(n).then((id) => addCb?.(id)).catch(() => notify("Не удалось добавить человека")); }} />
+      <AddPersonSheet open={addOpen} onClose={() => setAddOpen(false)} getInviteUrl={getInviteUrl} onAdd={(n) => { void addPerson(n).then((id) => addCb?.(id)).catch(() => notify("Не удалось добавить человека")); }} />
       <Actions opened={menuOpen} onBackdropClick={() => setMenuOpen(false)}>
         <ActionsGroup>
           <ActionsLabel>{profileName || "Профиль"}</ActionsLabel>
@@ -836,29 +839,70 @@ function CopyLink({ label }: { label: string }) {
   );
 }
 
-function AddPersonSheet({ open, onClose, onAdd }: { open: boolean; onClose: () => void; onAdd: (name: string) => unknown }) {
-  const [nick, setNick] = useState("");
-  const [searched, setSearched] = useState(false);
+function AddPersonSheet({ open, onClose, onAdd, getInviteUrl }: {
+  open: boolean; onClose: () => void; onAdd: (name: string) => unknown; getInviteUrl: () => Promise<string>;
+}) {
   const [nm, setNm] = useState("");
+  const [url, setUrl] = useState<string | null>(null);
+  const [qr, setQr] = useState("");
+  const [failed, setFailed] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const getRef = useRef(getInviteUrl); getRef.current = getInviteUrl;
+
+  // The link is created on the server the first time the sheet opens; the QR is drawn right here from it.
+  useEffect(() => {
+    if (!open || url) return;
+    let off = false;
+    setFailed(false);
+    getRef.current()
+      .then(async (u) => {
+        const QR = await import("qrcode");
+        const svg = await QR.toString(u, { type: "svg", margin: 0, errorCorrectionLevel: "M", color: { dark: "#111827", light: "#ffffff" } });
+        if (!off) { setUrl(u); setQr(svg); }
+      })
+      .catch(() => { if (!off) setFailed(true); });
+    return () => { off = true; };
+  }, [open, url]);
+
+  const message = url ? `Давай делить траты в Zero: ${url}` : "";
+  const copy = async () => {
+    if (!message) return;
+    try { await navigator.clipboard.writeText(message); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch {}
+  };
+  const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+
   return (
     <BottomSheet open={open} onClose={onClose} title="Добавить человека" z={60}>
-      <Block className="!my-3">
-        <div className="mx-auto mb-1 size-32 rounded-xl border-8 border-white bg-[repeating-conic-gradient(#111_0_25%,#fff_0_50%)] bg-[length:22px_22px]" aria-label="QR-код (заглушка)" />
-        <CopyLink label="Скопировать ссылку-приглашение" />
-      </Block>
-      <List strong inset className="!my-3">
-        <ListInput label="Найти по нику в Telegram" type="text" placeholder="@nick" value={nick} onChange={(e: InputEv) => { setNick(e.target.value); setSearched(false); }} />
-      </List>
-      <Block>
-        <Button tonal colors={tonalBtn} disabled={!nick.trim()} onClick={() => setSearched(true)}>Найти</Button>
-        {searched && <p className={`${muted} mt-2`}>В прототипе поиск не подключён</p>}
-      </Block>
-      <List strong inset className="!my-3">
-        <ListInput label="Или добавить без аккаунта" info="Привяжется позже по ссылке" type="text" placeholder="Имя" value={nm} onChange={(e: InputEv) => setNm(e.target.value)} />
-      </List>
-      <Block className="!mt-2">
-        <Button colors={mainBtn} disabled={!nm.trim()} onClick={() => { onAdd(nm.trim()); setNm(""); onClose(); }}>Добавить</Button>
-      </Block>
+      <div className="mx-4 mt-3 rounded-2xl bg-white p-5">
+        <div className="text-base font-medium">Пригласить по ссылке</div>
+        <p className={`${muted} mt-1`}>Покажи QR или отправь ссылку. Друг войдёт через Telegram и сразу появится у тебя в списке.</p>
+        <div className="mx-auto mt-4 grid size-44 place-items-center rounded-2xl border border-black/10 p-3">
+          {qr ? <div className="size-full [&>svg]:size-full" role="img" aria-label="QR-код приглашения" dangerouslySetInnerHTML={{ __html: qr }} />
+            : <span className={muted}>{failed ? "Не удалось создать ссылку" : "Готовлю ссылку…"}</span>}
+        </div>
+        <div className="mt-4 flex gap-2">
+          <button disabled={!url} onClick={() => void copy()}
+            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl bg-[#111827] font-medium text-white active:opacity-80 disabled:opacity-40">
+            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}{copied ? "Скопировано" : "Скопировать приглашение"}
+          </button>
+          {canShare && (
+            <button disabled={!url} aria-label="Поделиться" onClick={() => void navigator.share({ text: message }).catch(() => {})}
+              className="grid size-12 place-items-center rounded-2xl bg-black/5 active:bg-black/10 disabled:opacity-40"><Send className="size-4" /></button>
+          )}
+        </div>
+        {failed && <button className="mt-3 w-full text-center text-sm underline opacity-70" onClick={() => setFailed(false)}>Попробовать ещё раз</button>}
+      </div>
+
+      <div className="mx-4 mt-3 rounded-2xl bg-white p-5">
+        <div className="text-base font-medium">Добавить без аккаунта</div>
+        <p className={`${muted} mt-1`}>Например, «Саша». Траты запишутся на имя, а потом привяжутся к человеку.</p>
+        <input value={nm} onChange={(e) => setNm(e.target.value)} placeholder="Имя" maxLength={60}
+          className="mt-3 h-12 w-full rounded-2xl bg-black/5 px-4 text-base outline-none" />
+        <button disabled={!nm.trim()} onClick={() => { onAdd(nm.trim()); setNm(""); onClose(); }}
+          className="mt-3 h-12 w-full rounded-2xl bg-[#111827] font-medium text-white active:opacity-80 disabled:opacity-40">Добавить</button>
+      </div>
+
+      <p className={`${muted} mx-4 mb-4 mt-3 px-1`}>Поиск по нику в Telegram появится позже.</p>
     </BottomSheet>
   );
 }
