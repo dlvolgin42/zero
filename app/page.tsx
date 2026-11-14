@@ -9,7 +9,7 @@ import {
 import { ME, demoExpenses, demoPeople } from "@/lib/demo";
 import {
   CURS, CUR_INFO, Cur, CurMap, Expense, Netting, Person, SYMBOL,
-  balancesFor, fmt, involves, nonZero, num, pairDebts, rate, splitEqual,
+  balancesFor, fmt, involves, nonZero, num, pairDebts, rate, setRates as applyRates, splitEqual,
 } from "@/lib/model";
 import { Draft, parsePhrase } from "@/lib/parse";
 import { avatarUri } from "@/lib/avatar";
@@ -224,8 +224,10 @@ export default function Root() {
     return r.json().catch(() => null);
   };
   // Real link from the server; demo mode has no server, so it gets a sample link.
-  const getInviteUrl = async (): Promise<string> =>
-    authRef.current === "user" ? ((await apiCall("GET", "/api/invite")) as { url: string }).url : `${location.origin}/join/demo`;
+  const getInviteUrl = async (ghostId?: string): Promise<string> =>
+    authRef.current === "user"
+      ? ((await apiCall("GET", ghostId ? `/api/invite?ghost=${encodeURIComponent(ghostId)}` : "/api/invite")) as { url: string }).url
+      : `${location.origin}/join/demo`;
   const applyState = (st: State) => {
     // The server calls me "me" with my real name; inside the app I am "Я".
     setPeople(st.people.map((p) => (p.id === ME ? { ...p, name: "Я" } : p)));
@@ -236,6 +238,14 @@ export default function Root() {
   };
   const refresh = async () => {
     try { applyState((await apiCall("GET", "/api/state")) as State); } catch { notify("Не удалось обновить данные с сервера"); }
+  };
+  // Real rates for converting debts. Until they arrive (and in demo mode) the built-in sample rates are used.
+  const [ratesDay, setRatesDay] = useState<string | null>(null);
+  const loadRates = async () => {
+    try {
+      const r = (await apiCall("GET", "/api/rates")) as { day: string | null; perUsd: Record<string, number> };
+      if (r.day) { applyRates(r.perUsd as Partial<Record<Cur, number>>); setRatesDay(r.day); }
+    } catch {}
   };
   const enterDemo = () => {
     setPeople(demoPeople); setExpenses(demoExpenses); setNettings([]); setFriendIds(null);
@@ -260,6 +270,7 @@ export default function Root() {
           setProfileName(me.name);
           setAuth("user");
           setStack([{ s: "home" }]);
+          void loadRates();
         } else setAuth(r.status === 503 ? "demo" : "anon");
       } catch { if (!off) { setAuth("anon"); notify("Не удалось загрузить данные. Обнови страницу"); } }
     };
@@ -547,8 +558,8 @@ export default function Root() {
       </Block>
       {!p.hasAccount && (
         <Block strong inset>
-          {p.name} пока без аккаунта. Отправь ссылку — после входа эти траты привяжутся к аккаунту.
-          <CopyLink label="Скопировать ссылку-приглашение" />
+          {p.name} пока без аккаунта. Отправь ему эту ссылку: когда он войдёт через Telegram, все траты с ним перейдут на его аккаунт, а вы станете друзьями. Ссылка одноразовая.
+          <CopyLink label="Скопировать ссылку для него" getUrl={() => getInviteUrl(p.id)} />
         </Block>
       )}
       <BlockTitle>Общие траты</BlockTitle>
@@ -580,7 +591,7 @@ export default function Root() {
     </>);
   } else if (screen.s === "net") {
     content = page(`Взаимозачёт: ${name(screen.id)}`,
-      <NetForm bal={balances[screen.id] ?? {}} onApply={(items) => {
+      <NetForm ratesDay={ratesDay} bal={balances[screen.id] ?? {}} onApply={(items) => {
         const made = items.map(({ sign, ...it }) => ({
           id: uuid(), date: today(), ...it,
           debtor: sign > 0 ? screen.id : ME, creditor: sign > 0 ? ME : screen.id,
@@ -692,7 +703,7 @@ export default function Root() {
           });
           setSettleOpen(false);
         }} />
-      <AddPersonSheet open={addOpen} onClose={() => setAddOpen(false)} getInviteUrl={getInviteUrl} onAdd={(n) => { void addPerson(n).then((id) => addCb?.(id)).catch(() => notify("Не удалось добавить человека")); }} />
+      <AddPersonSheet open={addOpen} onClose={() => setAddOpen(false)} getInviteUrl={() => getInviteUrl()} onAdd={(n) => { void addPerson(n).then((id) => addCb?.(id)).catch(() => notify("Не удалось добавить человека")); }} />
       <Actions opened={menuOpen} onBackdropClick={() => setMenuOpen(false)}>
         <ActionsGroup>
           <ActionsLabel>{profileName || "Профиль"}</ActionsLabel>
@@ -854,14 +865,23 @@ function Logo({ className = "" }: { className?: string }) {
   );
 }
 
-function CopyLink({ label }: { label: string }) {
-  const [done, setDone] = useState(false);
+// Copies a ready invite message for a placeholder person. The one-time link is created on the server when the button is pressed.
+function CopyLink({ label, getUrl }: { label: string; getUrl: () => Promise<string> }) {
+  const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
   return (
-    <Button tonal colors={tonalBtn} large className="mt-3" onClick={async () => {
-      try { await navigator.clipboard.writeText("https://example.com/invite/demo"); } catch {}
-      setDone(true);
+    <Button tonal colors={tonalBtn} large className="mt-3" disabled={state === "busy"} onClick={async () => {
+      setState("busy");
+      try {
+        const url = await getUrl();
+        await navigator.clipboard.writeText(`Давай делить траты в Zero: ${url}`);
+        setState("done");
+        setTimeout(() => setState("idle"), 2500);
+      } catch { setState("error"); }
     }}>
-      <span className="flex items-center gap-2">{done ? <Check className="size-4" /> : <Copy className="size-4" />}{done ? "Скопировано" : label}</span>
+      <span className="flex items-center gap-2">
+        {state === "done" ? <Check className="size-4" /> : <Copy className="size-4" />}
+        {state === "done" ? "Скопировано" : state === "error" ? "Не получилось, ещё раз" : label}
+      </span>
     </Button>
   );
 }
@@ -1263,7 +1283,7 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
       <div className="sticky bottom-0 -mx-4 bg-[#f6f6f8] px-4 pt-2 pb-[max(1rem,env(safe-area-inset-bottom))]">
         {pad && (
           // preventDefault keeps focus on the amount, so tapping a key does not hide the keypad.
-          <div data-pad className="mb-3 grid grid-cols-3 gap-1.5" onMouseDown={(e) => e.preventDefault()}>
+          <div data-pad data-no-sheet-drag className="mb-3 grid grid-cols-3 gap-1.5" onMouseDown={(e) => e.preventDefault()}>
             {["1", "2", "3", "4", "5", "6", "7", "8", "9", ",", "0", "back"].map((k) => (
               <button key={k} className="h-11 rounded-xl bg-white text-xl font-medium active:bg-black/10" aria-label={k === "back" ? "Стереть" : k} onClick={() => press(k)}>
                 {k === "back" ? <Delete className="mx-auto size-5" /> : k}
@@ -1282,8 +1302,8 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
   );
 }
 
-function NetForm({ bal, onApply }: {
-  bal: CurMap;
+function NetForm({ bal, ratesDay, onApply }: {
+  bal: CurMap; ratesDay: string | null;
   onApply: (items: { fromCur: Cur; fromAmount: number; toCur: Cur; toAmount: number; rate: number; sign: number }[]) => void;
 }) {
   const items = nonZero(bal);
@@ -1298,6 +1318,7 @@ function NetForm({ bal, onApply }: {
   return (
     <>
       <BlockTitle>В какую валюту свести</BlockTitle>
+      <p className={`${muted} mx-4 mb-2 px-1`}>{ratesDay ? `Курсы на ${ruDate(ratesDay)}, ExchangeRate-API. Курс можно поправить вручную.` : "Курсы пока примерные. Курс можно поправить вручную."}</p>
       <Chips options={items.map(([c]) => ({ value: c, label: `${c} ${SYMBOL[c]}` }))} selected={[target]} onPick={setTarget} />
       <List strong inset dividers>
         {rows.map((r) => (

@@ -266,9 +266,24 @@ export async function createNetting(me: string, input: NettingInput): Promise<vo
 
 export const INVITE_COOKIE = "zero_invite";
 
-// My personal invite link code: one reusable code per person, created on first use.
-export async function myInviteCode(me: string): Promise<{ code: string }> {
+// An invite link code. Without a ghost it is my personal link: one reusable code per person, created on first use.
+// With a ghost (a placeholder person I made, "Sasha") it is a one-time link that hands that placeholder to whoever opens it.
+export async function myInviteCode(me: string, ghostId?: string | null): Promise<{ code: string }> {
   const sql = db();
+  if (ghostId) {
+    if (!isUuid(ghostId)) throw bad("bad_id");
+    const ok = await sql<{ id: string }[]>`
+      select p.id from people p join friend_links f on f.friend_id = p.id and f.owner_id = ${me}
+      where p.id = ${ghostId} and p.created_by = ${me} and p.merged_into is null
+        and not exists (select 1 from identities i where i.person_id = p.id)`;
+    if (!ok[0]) throw new HttpError(404, "no_such_placeholder");
+    const found = await sql<{ code: string }[]>`
+      select code from invites where inviter_id = ${me} and ghost_id = ${ghostId} and used_by is null order by created_at limit 1`;
+    if (found[0]) return { code: found[0].code };
+    const code = randomToken(9);
+    await sql`insert into invites (code, inviter_id, ghost_id) values (${code}, ${me}, ${ghostId})`;
+    return { code };
+  }
   const found = await sql<{ code: string }[]>`
     select code from invites where inviter_id = ${me} and ghost_id is null and used_by is null order by created_at limit 1`;
   if (found[0]) return { code: found[0].code };
@@ -277,16 +292,53 @@ export async function myInviteCode(me: string): Promise<{ code: string }> {
   return { code };
 }
 
-// Someone opened an invite link and is logged in: make both people friends. Safe to repeat.
-// Invites tied to a placeholder person (ghost_id) are not claimed yet; they only connect the two people.
+type Tx = Parameters<Parameters<ReturnType<typeof db>["begin"]>[1]>[0];
+
+// Hand a placeholder person over to a real one: every expense, share, friend link and history entry that pointed at
+// the placeholder now points at the real person, and the placeholder is marked as merged. Money stays exactly the same.
+async function mergePlaceholder(tx: Tx, ghost: string, into: string) {
+  // Someone who was on the same expense twice (as the placeholder and as themselves) becomes one line with the sum.
+  for (const table of ["expense_payers", "expense_shares"] as const) {
+    await tx`
+      insert into ${tx(table)} (expense_id, person_id, amount_minor)
+      select expense_id, ${into}, amount_minor from ${tx(table)} where person_id = ${ghost}
+      on conflict (expense_id, person_id) do update set amount_minor = ${tx(table)}.amount_minor + excluded.amount_minor`;
+    await tx`delete from ${tx(table)} where person_id = ${ghost}`;
+  }
+  await tx`update expenses set created_by = ${into} where created_by = ${ghost}`;
+  await tx`update expense_events set actor_id = ${into} where actor_id = ${ghost}`;
+  await tx`update nettings set debtor_id = ${into} where debtor_id = ${ghost}`;
+  await tx`update nettings set creditor_id = ${into} where creditor_id = ${ghost}`;
+  await tx`update nettings set created_by = ${into} where created_by = ${ghost}`;
+  await tx`
+    insert into friend_links (owner_id, friend_id, position)
+    select owner_id, ${into}, position from friend_links where friend_id = ${ghost} and owner_id <> ${into}
+    on conflict do nothing`;
+  await tx`delete from friend_links where friend_id = ${ghost} or owner_id = ${ghost}`;
+  await tx`update people set merged_into = ${into} where id = ${ghost}`;
+}
+
+// Someone opened an invite link and is logged in. Makes both people friends; with a placeholder link they also take over
+// the placeholder's expenses. Safe to repeat: a used placeholder link does nothing the second time.
 export async function acceptInvite(code: string, me: string): Promise<void> {
   const sql = db();
-  const rows = await sql<{ inviter_id: string }[]>`
-    select inviter_id from invites where code = ${code} and (expires_at is null or expires_at > now())`;
-  const inviter = rows[0]?.inviter_id;
-  if (!inviter || inviter === me) return;
+  const rows = await sql<{ inviter_id: string; ghost_id: string | null; used_by: string | null }[]>`
+    select inviter_id, ghost_id, used_by from invites where code = ${code} and (expires_at is null or expires_at > now())`;
+  const inv = rows[0];
+  if (!inv || inv.inviter_id === me) return;
   await sql.begin(async (tx) => {
-    await tx`insert into friend_links (owner_id, friend_id) values (${me}, ${inviter}), (${inviter}, ${me}) on conflict do nothing`;
-    await tx`update invites set used_at = coalesce(used_at, now()) where code = ${code}`;
+    if (inv.ghost_id) {
+      if (inv.used_by) return; // a placeholder can be handed over only once
+      const ghost = await tx<{ id: string }[]>`
+        select p.id from people p
+        where p.id = ${inv.ghost_id} and p.merged_into is null and p.created_by = ${inv.inviter_id}
+          and not exists (select 1 from identities i where i.person_id = p.id)
+        for update`;
+      if (ghost[0]) await mergePlaceholder(tx, ghost[0].id, me);
+      await tx`update invites set used_by = ${me}, used_at = now() where code = ${code}`;
+    } else {
+      await tx`update invites set used_at = coalesce(used_at, now()) where code = ${code}`;
+    }
+    await tx`insert into friend_links (owner_id, friend_id) values (${me}, ${inv.inviter_id}), (${inv.inviter_id}, ${me}) on conflict do nothing`;
   });
 }

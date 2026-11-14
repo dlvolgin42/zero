@@ -111,8 +111,14 @@ export interface Netting {
 
 export type CurMap = Partial<Record<Cur, number>>;
 
+// Rates in use: the sample ones above until real rates arrive from the server.
+let RATES: Record<Cur, number> = DEMO_RATE;
+export function setRates(perUsd: Partial<Record<Cur, number>>) {
+  RATES = { ...DEMO_RATE, ...perUsd };
+}
+
 export function rate(from: Cur, to: Cur): number {
-  return DEMO_RATE[to] / DEMO_RATE[from];
+  return RATES[to] / RATES[from];
 }
 
 // Absolute amount without the currency sign: "4 000" or "9 418,60".

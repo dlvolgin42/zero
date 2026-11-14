@@ -37,9 +37,67 @@ export function BottomSheet({ open, onClose, title, children, z = 50 }: {
     return () => lockPage(false);
   }, [mounted]);
 
+  // Closing by swiping down from anywhere: a downward drag that starts in the content while it is scrolled to the very top
+  // pulls the sheet down. Inputs and anything marked data-no-sheet-drag never start it; normal scrolling is left alone.
+  const contentRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef({ startY: 0, startT: 0, active: false, eligible: false });
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!mounted || !el) return;
+    const blocked = (t: EventTarget | null) => {
+      let n = t as HTMLElement | null;
+      if (n?.closest("input,textarea,select,[contenteditable='true'],[data-no-sheet-drag]")) return true;
+      // Inside a scrolled inner list the finger scrolls that list instead.
+      for (; n && n !== el; n = n.parentElement) if (n.scrollHeight > n.clientHeight && n.scrollTop > 0) return true;
+      return false;
+    };
+    const down = (e: TouchEvent) => {
+      const d = dragRef.current;
+      d.eligible = e.touches.length === 1 && el.scrollTop <= 0 && !blocked(e.target);
+      d.active = false;
+      d.startY = e.touches[0].clientY;
+      d.startT = performance.now();
+    };
+    const move = (e: TouchEvent) => {
+      const d = dragRef.current;
+      if (!d.eligible) return;
+      const dy = e.touches[0].clientY - d.startY;
+      if (!d.active) {
+        if (dy < -6) { d.eligible = false; return; } // moving up: this is scrolling
+        if (dy < 10 || el.scrollTop > 0) return;
+        d.active = true;
+        setDragging(true);
+      }
+      e.preventDefault();
+      setDragY(Math.max(0, dy));
+    };
+    const up = (e: TouchEvent) => {
+      const d = dragRef.current;
+      if (!d.active) { d.eligible = false; return; }
+      d.active = false; d.eligible = false;
+      setDragging(false);
+      const dy = Math.max(0, (e.changedTouches[0]?.clientY ?? d.startY) - d.startY);
+      const speed = dy / Math.max(1, performance.now() - d.startT);
+      if (dy > 110 || (dy > 30 && speed > 0.6)) onCloseRef.current();
+      else setDragY(0);
+    };
+    el.addEventListener("touchstart", down, { passive: true });
+    el.addEventListener("touchmove", move, { passive: false });
+    el.addEventListener("touchend", up);
+    el.addEventListener("touchcancel", up);
+    return () => {
+      el.removeEventListener("touchstart", down);
+      el.removeEventListener("touchmove", move);
+      el.removeEventListener("touchend", up);
+      el.removeEventListener("touchcancel", up);
+    };
+  }, [mounted]);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   if (!mounted) return null;
 
-  // Only the grab area (handle and title row) drags the sheet; the content keeps its own scrolling.
+  // The handle and title row also drag the sheet (pointer events, works with a mouse too).
   const onDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest("button")) return;
     start.current = { y: e.clientY, t: performance.now() };
@@ -77,7 +135,7 @@ export function BottomSheet({ open, onClose, title, children, z = 50 }: {
             <button className="grid size-9 place-items-center rounded-full bg-black/5 text-[#111827] active:bg-black/10" aria-label="Закрыть" onClick={onClose}><X className="size-5" /></button>
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">{children}</div>
+        <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">{children}</div>
       </div>
     </div>
   );
