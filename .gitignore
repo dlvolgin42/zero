@@ -45,3 +45,6 @@ next-env.d.ts
 
 # local tool settings
 .claude/
+
+# server address for deploys
+/deploy/local.env

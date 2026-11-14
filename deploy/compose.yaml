@@ -7,8 +7,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgres://zero:${POSTGRES_PASSWORD}@db:5432/zero
-      APP_URL: https://zero.example.com
-    # The owner's proxy forwards https://zero.example.com to 127.0.0.1:20080.
+    # APP_URL (the public address) comes from .env on the server. The owner's proxy forwards that address to 127.0.0.1:20080.
     ports:
       - "127.0.0.1:20080:3000"
     mem_limit: 384m

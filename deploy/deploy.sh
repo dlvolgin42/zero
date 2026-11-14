@@ -2,7 +2,11 @@
 # Build locally, upload only what changed to the server and restart the service.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-HOST="${ZERO_HOST:-zero@your-server}"
+# Server address and public URL live in deploy/local.env (not in git); see deploy/local.env.example.
+[ -f deploy/local.env ] && . deploy/local.env
+: "${ZERO_HOST:?Set ZERO_HOST (user@server) in deploy/local.env}"
+: "${APP_URL:?Set APP_URL (public https address) in deploy/local.env}"
+HOST="$ZERO_HOST"
 
 npm run build
 
@@ -23,15 +27,17 @@ ssh "$HOST" 'mkdir -p ~/app'
 # --exclude=.env and backups/: the server's secrets and database dumps stay untouched and are never deleted.
 rsync -az --delete --checksum --stats --exclude=.env --exclude=backups/ -e ssh .deploy/ "$HOST":app/
 
-ssh "$HOST" '
+ssh "$HOST" "APP_URL='$APP_URL' bash -s" <<'REMOTE'
   set -e
   cd ~/app
   touch .env && chmod 600 .env
+  # The public address the app uses for login redirects and invite links.
+  { grep -v "^APP_URL=" .env || true; printf "APP_URL=%s\n" "$APP_URL"; } > .env.new && mv .env.new .env && chmod 600 .env
   # The database password is created once, on the server, and never leaves it.
   grep -q "^POSTGRES_PASSWORD=" .env || printf "POSTGRES_PASSWORD=%s\n" "$(head -c 24 /dev/urandom | od -An -tx1 | tr -d " \n")" >> .env
   mkdir -p backups
   docker compose up -d --build
   docker image prune -f >/dev/null
   docker compose ps
-'
+REMOTE
 rm -rf .deploy
