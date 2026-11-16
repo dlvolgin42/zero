@@ -510,7 +510,10 @@ export default function Root() {
       : byDebt;
     content = (
       <Page className="pb-44">
-        <div className="flex h-14 items-center justify-center px-4 pt-safe"><Logo className="text-2xl" /></div>
+        <div className="flex min-h-14 flex-col items-center justify-center px-4 pt-safe">
+          <Logo className="text-2xl" />
+          <div className={`${muted} text-sm`}>Диман петух</div>
+        </div>
         {/* Two separate cards, each with its title above it rather than inside. */}
         <div className="mt-2 grid grid-cols-2 gap-3 px-4">
           <div className="flex flex-col">
