@@ -1,10 +1,10 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, Check, HandCoins, Send, Shuffle, ChevronDown, ChevronRight, Copy, Delete, Hash, Mic, Search, Plus, UserPlus, X } from "lucide-react";
+import { ArrowLeft, CalendarDays, Check, ChevronLeft, HandCoins, Send, Shuffle, ChevronDown, ChevronRight, Copy, Delete, Equal, Hash, Mic, Search, Plus, UserPlus, X } from "lucide-react";
 import {
   Actions, ActionsButton, ActionsGroup, ActionsLabel, App, Block, BlockTitle, Button, Chip, Link, List, ListInput, ListItem,
-  Navbar, NavbarBackLink, Page, Segmented, SegmentedButton,
+  Navbar, Page, Segmented, SegmentedButton,
 } from "konsta/react";
 import { ME, demoExpenses, demoPeople } from "@/lib/demo";
 import {
@@ -433,7 +433,12 @@ export default function Root() {
 
   const page = (title: string, body: React.ReactNode, right?: React.ReactNode) => (
     <Page className="pb-40">
-      <Navbar title={title} left={screen.s !== "home" ? <NavbarBackLink text="Назад" onClick={back} /> : undefined} right={right} />
+      <Navbar title={title} left={screen.s !== "home" ? (
+        // Konsta's back link draws its own arrow; this keeps every icon in the app from Lucide.
+        <Link className="k-navbar-back-link" aria-label="Назад" onClick={back}>
+          {theme === "ios" ? <ChevronLeft className="size-7 -ml-1.5" strokeWidth={2.25} /> : <ArrowLeft className="size-6" />}
+        </Link>
+      ) : undefined} right={right} />
       {body}
     </Page>
   );
@@ -1022,6 +1027,27 @@ function SettleSheet({ open, onClose, friend, balance, defaultCur, onSave }: {
   );
 }
 
+// The expense amount field accepts a sum: numbers joined by + and ×, × first. Numbers use a decimal comma.
+const MAX_MINOR = 99_999_999_999_99; // keeps the result well inside safe integers
+function calcMinor(expr: string): number {
+  const num = (s: string) => parseFloat((s || "0").replace(",", ".")) || 0;
+  const total = expr.replace(/[+×]$/, "").split("+").reduce((sum, term) => sum + term.split("×").reduce((p, f) => p * num(f), 1), 0);
+  return Math.round(total * 100);
+}
+// Writes a result back as text the keypad can keep editing: "1234,5".
+const calcStr = (expr: string) => {
+  const m = calcMinor(expr);
+  if (m <= 0) return "";
+  return (m / 100).toFixed(2).replace(/\.?0+$/, "").replace(".", ",");
+};
+const groupNum = (v: string) => {
+  const [i, d] = v.split(",");
+  const grouped = i.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return d !== undefined ? `${grouped},${d}` : grouped;
+};
+const prettyExpr = (v: string) => v.split(/([+×])/).map((part) => (part === "+" || part === "×" ? ` ${part} ` : groupNum(part))).join("");
+const fmtPlain = (minor: number) => groupNum((minor / 100).toFixed(2).replace(/\.00$/, "").replace(".", ","));
+
 type FormData = Pick<Expense, "title" | "amount" | "currency" | "date" | "payers" | "shares" | "tag">;
 
 function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, requestAddPerson, lastCurWith }: {
@@ -1050,24 +1076,34 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // The amount can be a sum like "1200+350×2": the keypad has + and ×, and = (or closing the keypad) collapses it to the result.
   const press = (k: string) => setAmountStr((prev) => {
     if (k === "back") return prev.slice(0, -1);
-    if (k === ",") return prev.includes(",") ? prev : (prev || "0") + ",";
-    if (prev.includes(",") && prev.split(",")[1].length >= 2) return prev;
-    if (prev === "0") return k;
-    if (prev.replace(",", "").length >= 9) return prev;
+    if (k === "=") return calcStr(prev);
+    if (k === "+" || k === "×") {
+      const base = prev.replace(/,$/, "");
+      if (!base) return prev;
+      return /[+×]$/.test(base) ? base.slice(0, -1) + k : base + k;
+    }
+    const num = prev.split(/[+×]/).pop()!; // the number being typed
+    if (k === ",") return num.includes(",") ? prev : prev + (num ? "," : "0,");
+    if (num.includes(",") && num.split(",")[1].length >= 2) return prev;
+    if (num === "0") return prev.slice(0, -1) + k;
+    if (num.replace(",", "").length >= 9) return prev;
     return prev + k;
   });
   const onAmountKey = (e: React.KeyboardEvent) => {
     if (/^\d$/.test(e.key)) press(e.key);
     else if (e.key === "," || e.key === ".") press(",");
+    else if (e.key === "+") press("+");
+    else if (e.key === "*" || e.key === "x" || e.key === "х") press("×");
+    else if (e.key === "=" || e.key === "Enter") press("=");
     else if (e.key === "Backspace") press("back");
   };
-  const pretty = (v: string) => {
-    const [i, d] = v.split(",");
-    const grouped = i.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-    return d !== undefined ? `${grouped},${d}` : grouped;
-  };
+  // Closing the keypad turns an unfinished sum into its result.
+  useEffect(() => {
+    if (!pad) setAmountStr((prev) => (/[+×]/.test(prev) ? calcStr(prev) : prev));
+  }, [pad]);
   const [currency, setCurrency] = useState<Cur>(init.currency);
   const [curTouched, setCurTouched] = useState(!!editing);
   const [title, setTitle] = useState(init.title);
@@ -1081,11 +1117,13 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
   const [tag, setTag] = useState(editing?.tag ?? "");
 
   const toMinor = (s: string) => Math.round(parseFloat((s || "0").replace(",", ".")) * 100) || 0;
-  const amount = toMinor(amountStr);
+  const amount = calcMinor(amountStr);
+  const isExpr = /[+×]/.test(amountStr);
   const shares = mode === "equal" ? splitEqual(amount, ids, payerId) : ids.map((personId) => ({ personId, amount: toMinor(exact[personId]) }));
   const sum = shares.reduce((a, s) => a + s.amount, 0);
   const error =
     amount <= 0 ? "Введи сумму" :
+    amount > MAX_MINOR ? "Слишком большая сумма" :
     ids.length === 0 ? "Выбери, на кого делим" :
     !ids.includes(ME) && payerId !== ME ? "Ты сам должен участвовать: платить или быть в долях" :
     ids.length === 1 && ids[0] === payerId ? "Добавь хотя бы одного человека, кроме плательщика" :
@@ -1125,9 +1163,15 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
         <div className="flex items-center gap-3">
           <div data-amount ref={amountRef} role="textbox" aria-label="Сумма" tabIndex={0}
             onClick={() => setPad(true)} onKeyDown={onAmountKey}
-            className="min-w-0 flex-1 cursor-text truncate text-4xl font-semibold tabular-nums outline-none">
-            {amountStr ? pretty(amountStr) : <span className="opacity-25">0</span>}
-            {pad && <span className="ml-0.5 inline-block h-8 w-0.5 translate-y-1 animate-pulse bg-[#111827]" />}
+            className="min-w-0 flex-1 cursor-text outline-none">
+            {/* A long sum is cut from the left (rtl), so the end being typed stays visible. */}
+            <div className={`truncate font-semibold tabular-nums ${isExpr ? "text-2xl text-left [direction:rtl]" : "text-4xl"}`}>
+              <bdi>
+                {amountStr ? prettyExpr(amountStr) : <span className="opacity-25">0</span>}
+                {pad && <span className={`ml-0.5 inline-block w-0.5 animate-pulse bg-[#111827] ${isExpr ? "h-6 translate-y-0.5" : "h-8 translate-y-1"}`} />}
+              </bdi>
+            </div>
+            {isExpr && <div className="truncate text-base tabular-nums opacity-55">= {fmtPlain(amount)}</div>}
           </div>
           <div data-dd className="relative shrink-0">
             <button aria-label="Валюта" aria-expanded={dd === "cur"} onClick={() => { setDd(dd === "cur" ? null : "cur"); setCurQuery(""); }}
@@ -1283,12 +1327,18 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
       <div className="sticky bottom-0 -mx-4 bg-[#f6f6f8] px-4 pt-2 pb-[max(1rem,env(safe-area-inset-bottom))]">
         {pad && (
           // preventDefault keeps focus on the amount, so tapping a key does not hide the keypad.
-          <div data-pad data-no-sheet-drag className="mb-3 grid grid-cols-3 gap-1.5" onMouseDown={(e) => e.preventDefault()}>
-            {["1", "2", "3", "4", "5", "6", "7", "8", "9", ",", "0", "back"].map((k) => (
-              <button key={k} className="h-11 rounded-xl bg-white text-xl font-medium active:bg-black/10" aria-label={k === "back" ? "Стереть" : k} onClick={() => press(k)}>
-                {k === "back" ? <Delete className="mx-auto size-5" /> : k}
-              </button>
-            ))}
+          <div data-pad data-no-sheet-drag className="mb-3 grid grid-cols-4 gap-1.5" onMouseDown={(e) => e.preventDefault()}>
+            {["1", "2", "3", "back", "4", "5", "6", "×", "7", "8", "9", "+", ",", "0", "="].map((k) => {
+              const op = k === "+" || k === "×" || k === "=" || k === "back";
+              const label = { back: "Стереть", "+": "Плюс", "×": "Умножить", "=": "Посчитать" }[k] ?? k;
+              return (
+                <button key={k} aria-label={label} onClick={() => press(k)}
+                  className={`h-11 rounded-xl text-xl font-medium active:bg-black/10 ${op ? "bg-black/[0.06]" : "bg-white"} ${k === "=" ? "col-span-2" : ""}`}>
+                  {k === "back" ? <Delete className="mx-auto size-5" /> : k === "+" ? <Plus className="mx-auto size-5" />
+                    : k === "×" ? <X className="mx-auto size-5" /> : k === "=" ? <Equal className="mx-auto size-5" /> : k}
+                </button>
+              );
+            })}
           </div>
         )}
         {/* Hidden while typing: a hint appearing above the button would shift the keys under the finger. */}
