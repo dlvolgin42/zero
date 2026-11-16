@@ -1061,6 +1061,8 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
   const [amountStr, setAmountStr] = useState(init.amount ? String(init.amount / 100).replace(".", ",") : "");
   // Own keypad for the amount, so the system keyboard never covers the form. It hides while a text field is in use.
   const [pad, setPad] = useState(false);
+  // Which field the keypad types into: the total ("amount") or one person's share in "по суммам" (their id).
+  const [padFor, setPadFor] = useState<string>("amount");
   const amountRef = useRef<HTMLDivElement>(null);
   const dateRef = useRef<HTMLInputElement>(null);
   // Which dropdown is open under the two tiles; the date picker and tag select are native.
@@ -1077,7 +1079,7 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // The amount can be a sum like "1200+350×2": the keypad has + and ×, and = (or closing the keypad) collapses it to the result.
-  const press = (k: string) => setAmountStr((prev) => {
+  const edit = (prev: string, k: string) => {
     if (k === "back") return prev.slice(0, -1);
     if (k === "=") return calcStr(prev);
     if (k === "+" || k === "×") {
@@ -1091,7 +1093,12 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
     if (num === "0") return prev.slice(0, -1) + k;
     if (num.replace(",", "").length >= 9) return prev;
     return prev + k;
-  });
+  };
+  const press = (k: string) => {
+    if (padFor === "amount") setAmountStr((prev) => edit(prev, k));
+    else setExact((x) => ({ ...x, [padFor]: edit(x[padFor] ?? "", k) }));
+  };
+  const openPad = (target: string) => { setPadFor(target); setPad(true); };
   const onAmountKey = (e: React.KeyboardEvent) => {
     if (/^\d$/.test(e.key)) press(e.key);
     else if (e.key === "," || e.key === ".") press(",");
@@ -1100,10 +1107,16 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
     else if (e.key === "=" || e.key === "Enter") press("=");
     else if (e.key === "Backspace") press("back");
   };
-  // Closing the keypad turns an unfinished sum into its result.
+  // Closing the keypad, or moving it to another field, turns an unfinished sum into its result.
   useEffect(() => {
-    if (!pad) setAmountStr((prev) => (/[+×]/.test(prev) ? calcStr(prev) : prev));
-  }, [pad]);
+    const active = pad ? padFor : null;
+    if (active !== "amount") setAmountStr((prev) => (/[+×]/.test(prev) ? calcStr(prev) : prev));
+    setExact((x) => {
+      const done = Object.entries(x).filter(([id, v]) => id !== active && /[+×]/.test(v));
+      return done.length ? { ...x, ...Object.fromEntries(done.map(([id, v]) => [id, calcStr(v)])) } : x;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pad, padFor]);
   const [currency, setCurrency] = useState<Cur>(init.currency);
   const [curTouched, setCurTouched] = useState(!!editing);
   const [title, setTitle] = useState(init.title);
@@ -1111,7 +1124,7 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
   const [ids, setIds] = useState<string[]>(init.participantIds);
   const [mode, setMode] = useState<"equal" | "exact">(wasEqual ? "equal" : "exact");
   const [exact, setExact] = useState<Record<string, string>>(
-    editing ? Object.fromEntries(editing.shares.map((s) => [s.personId, String(s.amount / 100)])) : {},
+    editing ? Object.fromEntries(editing.shares.map((s) => [s.personId, String(s.amount / 100).replace(".", ",")])) : {},
   );
   const [date, setDate] = useState(editing?.date ?? today());
   const [tag, setTag] = useState(editing?.tag ?? "");
@@ -1119,7 +1132,7 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
   const toMinor = (s: string) => Math.round(parseFloat((s || "0").replace(",", ".")) * 100) || 0;
   const amount = calcMinor(amountStr);
   const isExpr = /[+×]/.test(amountStr);
-  const shares = mode === "equal" ? splitEqual(amount, ids, payerId) : ids.map((personId) => ({ personId, amount: toMinor(exact[personId]) }));
+  const shares = mode === "equal" ? splitEqual(amount, ids, payerId) : ids.map((personId) => ({ personId, amount: calcMinor(exact[personId] ?? "") }));
   const sum = shares.reduce((a, s) => a + s.amount, 0);
   const error =
     amount <= 0 ? "Введи сумму" :
@@ -1157,18 +1170,18 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
       onClickCapture={(e) => {
         const t = e.target as HTMLElement;
         if (!t.closest("[data-amount],[data-pad]")) setPad(false);
-        if (!t.closest("[data-dd]")) setDd(null);
+        if (!t.closest("[data-dd],[data-pad]")) setDd(null); // typing a share must not close the split list
       }}>
       <div className={card}>
         <div className="flex items-center gap-3">
           <div data-amount ref={amountRef} role="textbox" aria-label="Сумма" tabIndex={0}
-            onClick={() => setPad(true)} onKeyDown={onAmountKey}
+            onClick={() => openPad("amount")} onKeyDown={onAmountKey}
             className="min-w-0 flex-1 cursor-text outline-none">
             {/* A long sum is cut from the left (rtl), so the end being typed stays visible. */}
             <div className={`truncate font-semibold tabular-nums ${isExpr ? "text-2xl text-left [direction:rtl]" : "text-4xl"}`}>
               <bdi>
                 {amountStr ? prettyExpr(amountStr) : <span className="opacity-25">0</span>}
-                {pad && <span className={`ml-0.5 inline-block w-0.5 animate-pulse bg-[#111827] ${isExpr ? "h-6 translate-y-0.5" : "h-8 translate-y-1"}`} />}
+                {pad && padFor === "amount" && <span className={`ml-0.5 inline-block w-0.5 animate-pulse bg-[#111827] ${isExpr ? "h-6 translate-y-0.5" : "h-8 translate-y-1"}`} />}
               </bdi>
             </div>
             {isExpr && <div className="truncate text-base tabular-nums opacity-55">= {fmtPlain(amount)}</div>}
@@ -1277,10 +1290,26 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
                   <Face person={p} className={`size-9 transition ${on ? "" : "opacity-50"}`} />
                   <span className={`flex-1 truncate ${on ? "" : "opacity-60"}`}>{p.id === ME ? "Я" : p.name}</span>
                   {on && mode === "equal" && amount > 0 && <span className="tabular-nums opacity-70">{fmt(share, currency)}</span>}
-                  {on && mode === "exact" && (
-                    <input className="h-9 w-28 rounded-xl bg-black/5 px-3 text-right text-base tabular-nums outline-none" inputMode="decimal" placeholder="0" aria-label={`Сумма: ${p.name}`}
-                      value={exact[p.id] ?? ""} onClick={(e) => e.stopPropagation()} onChange={(e) => setExact((x) => ({ ...x, [p.id]: e.target.value }))} />
-                  )}
+                  {on && mode === "exact" && (() => {
+                    // Same keypad as the total: digits, comma, + and ×; the result shows under a sum.
+                    const v = exact[p.id] ?? "";
+                    const active = pad && padFor === p.id;
+                    const expr = /[+×]/.test(v);
+                    return (
+                      <div data-amount role="textbox" tabIndex={0} aria-label={`Сумма: ${p.name}`}
+                        onClick={(e) => { e.stopPropagation(); openPad(p.id); }}
+                        onKeyDown={(e) => { if (padFor !== p.id) openPad(p.id); onAmountKey(e); }}
+                        className={`flex h-9 w-32 cursor-text flex-col justify-center rounded-xl px-3 text-right tabular-nums outline-none ${active ? "bg-[#a5b4fc]/35 ring-1 ring-[#111827]/20" : "bg-black/5"} ${expr ? "h-11" : ""}`}>
+                        <div className={`truncate [direction:rtl] ${expr ? "text-sm" : "text-base"}`}>
+                          <bdi>
+                            {v ? prettyExpr(v) : <span className="opacity-30">0</span>}
+                            {active && <span className="ml-0.5 inline-block h-4 w-0.5 translate-y-0.5 animate-pulse bg-[#111827]" />}
+                          </bdi>
+                        </div>
+                        {expr && <div className="truncate text-xs opacity-55">= {fmtPlain(calcMinor(v))}</div>}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
