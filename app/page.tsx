@@ -300,6 +300,9 @@ export default function Root() {
     setAvatarOpen(false);
   };
   const logout = async () => {
+    // The next account on this device starts from a clean "last shown" state.
+    seen.current = undefined;
+    try { localStorage.removeItem("seen-balances"); } catch {}
     if (auth === "user") { try { await fetch("/api/auth/logout", { method: "POST" }); } catch {} setAuth("anon"); }
     depth.current = 0;
     setStack([{ s: "login" }]);
@@ -355,23 +358,34 @@ export default function Root() {
   }, []);
   const name = (id: string) => people.find((p) => p.id === id)?.name ?? "?";
   const balances = useMemo(() => balancesFor(ME, expenses, nettings), [expenses, nettings]);
-  // What just changed per friend and currency; shown for a few seconds as a floating chip, a row flash and a count-up.
-  const prevBalances = useRef(balances);
+  // What changed per friend and currency since this device last showed the home screen. Shown once there as a floating
+  // chip, a row flash and a count-up: after my own expense when I come back home, after someone else's on my next visit.
+  // The last shown balances are kept on the device (only in memory in demo mode); the very first visit shows nothing.
   const [changes, setChanges] = useState<Record<string, CurMap>>({});
   const changesTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seen = useRef<Record<string, CurMap> | null | undefined>(undefined); // undefined: not loaded yet
+  const SEEN_KEY = "seen-balances";
   useEffect(() => {
+    if (stack[stack.length - 1].s !== "home" || (auth !== "user" && auth !== "demo")) return;
+    if (seen.current === undefined) {
+      seen.current = null;
+      if (auth === "user") { try { seen.current = JSON.parse(localStorage.getItem(SEEN_KEY) ?? "null"); } catch {} }
+    }
+    const before = seen.current;
+    seen.current = balances;
+    if (auth === "user") { try { localStorage.setItem(SEEN_KEY, JSON.stringify(balances)); } catch {} }
+    if (!before) return;
     const diff: Record<string, CurMap> = {};
-    for (const id of new Set([...Object.keys(prevBalances.current), ...Object.keys(balances)]))
+    for (const id of new Set([...Object.keys(before), ...Object.keys(balances)]))
       for (const c of CURS) {
-        const d = (balances[id]?.[c] ?? 0) - (prevBalances.current[id]?.[c] ?? 0);
+        const d = (balances[id]?.[c] ?? 0) - (before[id]?.[c] ?? 0);
         if (d !== 0) (diff[id] ??= {})[c] = d;
       }
-    prevBalances.current = balances;
     if (Object.keys(diff).length === 0) return;
     setChanges(diff);
     if (changesTimer.current) clearTimeout(changesTimer.current);
     changesTimer.current = setTimeout(() => setChanges({}), 3300);
-  }, [balances]);
+  }, [balances, stack, auth]);
   const tags = [...new Set(expenses.map((e) => e.tag).filter(Boolean))] as string[];
 
   const addPerson = async (n: string): Promise<string> => {
@@ -427,11 +441,12 @@ export default function Root() {
   const formPeople = (editing?: Expense) => people.filter((p) =>
     p.id === ME || friendIds === null || friendIds.includes(p.id) || (editing && [...editing.payers, ...editing.shares].some((x) => x.personId === p.id)));
 
-  // Konsta's back link draws its own arrow; this keeps every icon in the app from Lucide.
+  // A plain back button: Konsta's navbar link wraps it in a glass bubble with shadows, which looked off.
   const backLink = (
-    <Link className="k-navbar-back-link" aria-label="Назад" onClick={back}>
-      {theme === "ios" ? <ChevronLeft className="size-7 -ml-1.5" strokeWidth={2.25} /> : <ArrowLeft className="size-6" />}
-    </Link>
+    <button type="button" aria-label="Назад" onClick={back}
+      className="-ml-1 grid size-10 place-items-center rounded-full text-[#111827] transition active:scale-90 active:bg-black/5">
+      {theme === "ios" ? <ChevronLeft className="size-7" strokeWidth={2.25} /> : <ArrowLeft className="size-6" />}
+    </button>
   );
   const page = (title: string, body: React.ReactNode, right?: React.ReactNode) => (
     <Page className="pb-40">
@@ -843,7 +858,7 @@ function FriendList({ friends, balances, changes, onTap, onAdd, onReorder }: {
               transition: drag && !(lifted && !drag.settling) ? "transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1)" : undefined,
               zIndex: lifted ? 20 : undefined, position: "relative",
             }}
-            className={`flex items-center gap-3 border-b border-black/10 px-4 py-3 last:border-b-0 ${lifted ? "rounded-2xl bg-[#f3f4ff] shadow-[0_14px_32px_rgba(17,24,39,0.24)] ring-1 ring-[#a5b4fc]/70" : "active:bg-black/5"} ${changes[p.id] ? "flash-row" : ""}`}>
+            className={`flex items-center gap-3 border-b border-black/10 px-4 py-3 first:rounded-t-2xl last:rounded-b-2xl last:border-b-0 ${lifted ? "rounded-2xl bg-[#f3f4ff] shadow-[0_14px_32px_rgba(17,24,39,0.24)] ring-1 ring-[#a5b4fc]/70" : "active:bg-black/5"} ${changes[p.id] ? "flash-row" : ""}`}>
             <Face person={p} className="size-11" />
             <div className="min-w-0 flex-1">
               <div>{p.name}{!p.hasAccount && <span className="ml-2 text-xs opacity-55">без аккаунта</span>}</div>
