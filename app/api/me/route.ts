@@ -1,3 +1,4 @@
+import { isPhoto } from "@/lib/avatar";
 import type { NextRequest } from "next/server";
 import { SESSION_COOKIE, currentProfile, sameOrigin } from "@/lib/server/auth";
 import { NoDatabaseError, db, hasDatabase } from "@/lib/server/db";
@@ -27,7 +28,10 @@ export async function PATCH(request: NextRequest) {
     if (!me) return Response.json({ error: "unauthorized" }, { status: 401 });
     const body = (await request.json().catch(() => ({}))) as { name?: unknown; avatarSeed?: unknown };
     const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : undefined;
-    const seed = typeof body.avatarSeed === "string" ? body.avatarSeed.trim().slice(0, 40) : undefined;
+    // Either a short generated seed or an uploaded photo (a small JPEG data URL, resized by the client).
+    const rawSeed = typeof body.avatarSeed === "string" ? body.avatarSeed.trim() : undefined;
+    if (rawSeed !== undefined && isPhoto(rawSeed) && (rawSeed.length > 150_000 || !/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(rawSeed))) return Response.json({ error: "bad_photo" }, { status: 400 });
+    const seed = rawSeed === undefined ? undefined : isPhoto(rawSeed) ? rawSeed : rawSeed.slice(0, 40);
     if (name === "" ) return Response.json({ error: "empty_name" }, { status: 400 });
     if (name === undefined && seed === undefined) return Response.json({ error: "nothing_to_change" }, { status: 400 });
     await db()`

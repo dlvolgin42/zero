@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, CalendarDays, Check, ChevronLeft, HandCoins, Send, Shuffle, ChevronDown, Copy, Delete, Divide, Equal, Hash, Minus, Mic, Search, Plus, UserPlus, X } from "lucide-react";
+import { ArrowLeft, CalendarDays, Camera, Check, ChevronLeft, HandCoins, Send, Shuffle, ChevronDown, Copy, Delete, Divide, Equal, Hash, Minus, Mic, Search, Plus, UserPlus, X } from "lucide-react";
 import {
   Actions, ActionsButton, ActionsGroup, ActionsLabel, App, Block, BlockTitle, Button, Chip, Link, List, ListInput, ListItem,
   Navbar, Page, Segmented, SegmentedButton,
@@ -12,7 +12,7 @@ import {
   balancesFor, fmt, involves, nonZero, num, pairDebts, rate, setRates as applyRates, splitEqual,
 } from "@/lib/model";
 import { Draft, parsePhrase } from "@/lib/parse";
-import { avatarUri } from "@/lib/avatar";
+import { avatarUri, isPhoto } from "@/lib/avatar";
 import type { State } from "@/lib/server/data";
 import { BottomSheet } from "@/components/BottomSheet";
 import { PillSegmented } from "@/components/PillSegmented";
@@ -299,6 +299,17 @@ export default function Root() {
     else { try { localStorage.setItem("avatar-seed", seed); } catch {} }
     setAvatarOpen(false);
   };
+  // Centre-crops a chosen picture to a 256 px square JPEG (about 20 KB) and uses it as the avatar.
+  const uploadPhoto = async (file: File) => {
+    try {
+      const bmp = await createImageBitmap(file);
+      const side = Math.min(bmp.width, bmp.height);
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 256;
+      canvas.getContext("2d")!.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, 256, 256);
+      pickAvatar(canvas.toDataURL("image/jpeg", 0.82));
+    } catch { notify("Не получилось открыть это фото"); }
+  };
   const logout = async () => {
     // The next account on this device starts from a clean "last shown" state.
     seen.current = undefined;
@@ -309,10 +320,6 @@ export default function Root() {
   };
   const freshSeeds = (keep: string) => [keep, ...Array.from({ length: 11 }, () => Math.random().toString(36).slice(2, 10))];
   const openAvatarPicker = () => { setAvatarSeeds(freshSeeds(people.find((x) => x.id === ME)?.avatarSeed ?? ME)); setAvatarOpen(true); };
-  const choosePref = (p: ThemePref) => {
-    setPref(p);
-    try { localStorage.setItem(THEME_KEY, p); } catch {}
-  };
   const theme = pref === "auto" ? detected : pref;
 
   const screen = stack[stack.length - 1];
@@ -621,7 +628,7 @@ export default function Root() {
         back();
       }} />);
   } else if (screen.s === "history") {
-    content = page("История", <HistoryList expenses={expenses} nettings={nettings} tags={tags} name={name} open={(id) => go({ s: "expense", id })} />);
+    content = page("История", <HistoryList expenses={expenses} nettings={nettings} tags={tags} name={name} net={(e) => myNet(e)} open={(id) => go({ s: "expense", id })} />);
   } else {
     const meP = people.find((x) => x.id === ME)!;
     const card = "rounded-2xl bg-white p-4";
@@ -643,12 +650,6 @@ export default function Root() {
             {CURS.map((c) => <option key={c} value={c}>{SYMBOL[c]} {c} · {CUR_INFO[c].name}</option>)}
           </select>
           <p className={`${muted} mt-3`}>С неё начинается новая трата. Если с другом уже были траты в другой валюте, предложим её.</p>
-        </div>
-
-        <div className={card}>
-          <div className="mb-3 text-sm opacity-55">Внешний вид</div>
-          <PillSegmented value={pref} onChange={choosePref} options={[{ value: "auto", label: "Авто" }, { value: "ios", label: "iOS" }, { value: "material", label: "Android" }]} />
-          <p className={`${muted} mt-3`}>Авто: на Android — вид Android, на остальных устройствах — вид iOS.</p>
         </div>
 
         <button className="h-12 w-full rounded-2xl bg-white font-medium text-[#E0245E] active:bg-black/5" onClick={() => void logout()}>Выйти</button>
@@ -710,7 +711,11 @@ export default function Root() {
               );
             })}
           </div>
-          <button className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-white font-medium active:bg-black/5"
+          <label className="mt-4 flex h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-2xl bg-[#111827] font-medium text-white active:opacity-80">
+            <Camera className="size-5" />Загрузить своё фото
+            <input type="file" accept="image/*" className="sr-only" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void uploadPhoto(f); }} />
+          </label>
+          <button className="mt-2 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-white font-medium active:bg-black/5"
             onClick={() => setAvatarSeeds(freshSeeds(people.find((x) => x.id === ME)?.avatarSeed ?? ME))}>
             <Shuffle className="size-5" />Показать другие
           </button>
@@ -1483,21 +1488,21 @@ function NetForm({ bal, ratesDay, onApply }: {
   );
 }
 
-function HistoryList({ expenses, nettings, tags, name, open }: {
-  expenses: Expense[]; nettings: Netting[]; tags: string[]; name: (id: string) => string; open: (id: string) => void;
+function HistoryList({ expenses, nettings, tags, name, net, open }: {
+  expenses: Expense[]; nettings: Netting[]; tags: string[]; name: (id: string) => string; net: (e: Expense) => number; open: (id: string) => void;
 }) {
   const [tag, setTag] = useState("all");
   const byTag = tag !== "all";
   const events = [
-    ...expenses.filter((e) => !byTag || e.tag === tag).flatMap((e) => e.log.map((l, i) => ({ key: e.id + i, when: l.when, text: `${l.who} ${l.text}`, sub: `${e.title} · ${fmt(e.amount, e.currency)}`, id: e.id as string | null }))),
-    ...(byTag ? [] : nettings.map((n) => ({ key: n.id, when: n.date, text: `Взаимозачёт: ${name(n.debtor)} → ${name(n.creditor)}`, sub: `${fmt(n.fromAmount, n.fromCur)} → ${fmt(n.toAmount, n.toCur)} по курсу ${+n.rate.toFixed(4)}`, id: null }))),
+    ...expenses.filter((e) => !byTag || e.tag === tag).flatMap((e) => e.log.map((l, i) => ({ key: e.id + i, when: l.when, text: `${l.who} ${l.text}`, sub: `${e.title} · ${fmt(e.amount, e.currency)}`, id: e.id as string | null, v: e.deleted ? 0 : net(e), cur: e.currency as Cur | null }))),
+    ...(byTag ? [] : nettings.map((n) => ({ key: n.id, when: n.date, text: `Взаимозачёт: ${name(n.debtor)} → ${name(n.creditor)}`, sub: `${fmt(n.fromAmount, n.fromCur)} → ${fmt(n.toAmount, n.toCur)} по курсу ${+n.rate.toFixed(4)}`, id: null, v: 0, cur: null as Cur | null }))),
   ].sort((a, b) => b.when.localeCompare(a.when));
   return (
     <>
       <Chips options={[{ value: "all", label: "Все" }, ...tags.map((t) => ({ value: t, label: `#${t}` }))]} selected={[tag]} onPick={setTag} />
       <List strong inset dividers>
         {events.map((ev) => (
-          <ListItem key={ev.key} link={!!ev.id} chevron={false} title={ev.text} subtitle={ev.sub} after={ruDate(ev.when)} onClick={() => ev.id && open(ev.id)} />
+          <ListItem key={ev.key} link={!!ev.id} chevron={false} title={ev.text} subtitle={ev.sub} after={<span className="flex flex-col items-end">{ruDate(ev.when)}{ev.cur && ev.v !== 0 && <Money v={ev.v} cur={ev.cur} />}</span>} onClick={() => ev.id && open(ev.id)} />
         ))}
       </List>
     </>
