@@ -180,6 +180,8 @@ export default function Root() {
   const nameTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [friendOrder, setFriendOrder] = useState<string[]>([]);
   const [avatarOpen, setAvatarOpen] = useState(false);
+  const [curOpen, setCurOpen] = useState(false);
+  const [curQ, setCurQ] = useState("");
   const [avatarSeeds, setAvatarSeeds] = useState<string[]>([]);
   const [toast, setToast] = useState<{ text: string; action?: { label: string; run: () => void } } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -341,7 +343,7 @@ export default function Root() {
 
   // Swipe right anywhere = back (installed iOS apps have no system back gesture).
   const swipe = useRef({ canBack: false, back });
-  swipe.current = { canBack: stack.length > 1 && !addOpen && !avatarOpen, back };
+  swipe.current = { canBack: stack.length > 1 && !addOpen && !avatarOpen && !curOpen, back };
   useEffect(() => {
     let sx = 0, sy = 0, tracking = false, fired = false;
     const start = (e: TouchEvent) => {
@@ -649,14 +651,13 @@ export default function Root() {
           История<ChevronRight className="size-5 opacity-40" />
         </button>
 
-        <div className={card}>
-          <div className="mb-3 text-sm opacity-55">Валюта по умолчанию</div>
-          <select aria-label="Валюта по умолчанию" value={defaultCur} onChange={(e) => chooseDefaultCur(e.target.value as Cur)}
-            className="h-12 w-full rounded-2xl bg-black/5 px-4 text-base outline-none">
-            {CURS.map((c) => <option key={c} value={c}>{SYMBOL[c]} {c} · {CUR_INFO[c].name}</option>)}
-          </select>
-          <p className={`${muted} mt-3`}>С неё начинается новая трата. Если с другом уже были траты в другой валюте, предложим её.</p>
-        </div>
+        <button className={`${card} flex w-full items-center gap-3 text-left active:bg-black/5`} onClick={() => { setCurQ(""); setCurOpen(true); }}>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm opacity-55">Валюта по умолчанию</div>
+            <div className="mt-0.5 truncate font-medium">{SYMBOL[defaultCur]} {defaultCur} · {CUR_INFO[defaultCur].name}</div>
+          </div>
+          <ChevronRight className="size-5 shrink-0 opacity-40" />
+        </button>
 
         <button className="h-12 w-full rounded-2xl bg-white font-medium text-[#E0245E] active:bg-black/5" onClick={() => void logout()}>Выйти</button>
       </div>
@@ -703,6 +704,31 @@ export default function Root() {
           </div>
         </div>
       )}
+      <BottomSheet open={curOpen} onClose={() => setCurOpen(false)} title="Валюта по умолчанию">
+        <div className="px-4 pt-2 pb-4">
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 opacity-50" />
+            <input className="h-11 w-full rounded-2xl bg-black/5 pr-3 pl-10 text-base outline-none placeholder:opacity-40" placeholder="Поиск валюты" aria-label="Поиск валюты"
+              value={curQ} onChange={(e) => setCurQ(e.target.value)} />
+          </div>
+          <div className="mt-2 max-h-[50vh] overflow-y-auto overscroll-contain">
+            {(() => {
+              const q = curQ.trim().toLowerCase().replace(/ё/g, "е");
+              const list = CURS.filter((c) => !q || `${c} ${CUR_INFO[c].name} ${CUR_INFO[c].symbol}`.toLowerCase().replace(/ё/g, "е").includes(q));
+              if (list.length === 0) return <div className="px-2 py-6 text-center text-sm opacity-55">Ничего не нашлось</div>;
+              return list.map((c) => (
+                <button key={c} className={`flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left ${defaultCur === c ? "bg-[#a5b4fc]/25" : "active:bg-black/5"}`}
+                  onClick={() => { chooseDefaultCur(c); setCurOpen(false); }}>
+                  <span className="w-8 shrink-0 text-center text-lg opacity-70">{CUR_INFO[c].symbol}</span>
+                  <span className="font-medium">{c}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm opacity-55">{CUR_INFO[c].name}</span>
+                  {defaultCur === c && <Check className="size-5 shrink-0 opacity-70" />}
+                </button>
+              ));
+            })()}
+          </div>
+        </div>
+      </BottomSheet>
       <BottomSheet open={avatarOpen} onClose={() => setAvatarOpen(false)} title="Аватарка">
         <div className="px-4 pt-2 pb-4">
           <div className="grid grid-cols-4 gap-3">
