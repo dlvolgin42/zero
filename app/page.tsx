@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, CalendarDays, Check, ChevronLeft, HandCoins, Send, Shuffle, ChevronDown, ChevronRight, Copy, Delete, Equal, Hash, Mic, Search, Plus, UserPlus, X } from "lucide-react";
+import { ArrowLeft, CalendarDays, Check, ChevronLeft, HandCoins, Send, Shuffle, ChevronDown, ChevronRight, Copy, Delete, Equal, Hash, Minus, Mic, Search, Plus, UserPlus, X } from "lucide-react";
 import {
   Actions, ActionsButton, ActionsGroup, ActionsLabel, App, Block, BlockTitle, Button, Chip, Link, List, ListInput, ListItem,
   Navbar, Page, Segmented, SegmentedButton,
@@ -1027,17 +1027,22 @@ function SettleSheet({ open, onClose, friend, balance, defaultCur, onSave }: {
   );
 }
 
-// The expense amount field accepts a sum: numbers joined by + and ×, × first. Numbers use a decimal comma.
+// The expense amount field accepts a sum: numbers joined by +, − and ×, × first. Numbers use a decimal comma.
 const MAX_MINOR = 99_999_999_999_99; // keeps the result well inside safe integers
 function calcMinor(expr: string): number {
   const num = (s: string) => parseFloat((s || "0").replace(",", ".")) || 0;
-  const total = expr.replace(/[+×]$/, "").split("+").reduce((sum, term) => sum + term.split("×").reduce((p, f) => p * num(f), 1), 0);
+  const product = (term: string) => term.split("×").reduce((p, f) => p * num(f), 1);
+  // "a+b−c" -> ["a", "+", "b", "−", "c"]: each term is added or subtracted by the sign before it.
+  const parts = expr.replace(/[+−×]$/, "").split(/([+−])/);
+  let total = product(parts[0]);
+  for (let i = 1; i < parts.length; i += 2) total += (parts[i] === "−" ? -1 : 1) * product(parts[i + 1]);
   return Math.round(total * 100);
 }
-// Writes a result back as text the keypad can keep editing: "1234,5".
+// Writes a result back as text the keypad can keep editing: "1234,5". A result below zero keeps the sum, so it can be fixed.
 const calcStr = (expr: string) => {
   const m = calcMinor(expr);
-  if (m <= 0) return "";
+  if (m < 0) return expr;
+  if (m === 0) return "";
   return (m / 100).toFixed(2).replace(/\.?0+$/, "").replace(".", ",");
 };
 const groupNum = (v: string) => {
@@ -1045,8 +1050,8 @@ const groupNum = (v: string) => {
   const grouped = i.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
   return d !== undefined ? `${grouped},${d}` : grouped;
 };
-const prettyExpr = (v: string) => v.split(/([+×])/).map((part) => (part === "+" || part === "×" ? ` ${part} ` : groupNum(part))).join("");
-const fmtPlain = (minor: number) => groupNum((minor / 100).toFixed(2).replace(/\.00$/, "").replace(".", ","));
+const prettyExpr = (v: string) => v.split(/([+−×])/).map((part) => (/^[+−×]$/.test(part) ? ` ${part} ` : groupNum(part))).join("");
+const fmtPlain = (minor: number) => (minor < 0 ? "−" : "") + groupNum((Math.abs(minor) / 100).toFixed(2).replace(/\.00$/, "").replace(".", ","));
 
 type FormData = Pick<Expense, "title" | "amount" | "currency" | "date" | "payers" | "shares" | "tag">;
 
@@ -1078,16 +1083,16 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // The amount can be a sum like "1200+350×2": the keypad has + and ×, and = (or closing the keypad) collapses it to the result.
+  // The amount can be a sum like "1200+350×2−100": the keypad has +, − and ×, and = (or closing the keypad) collapses it to the result.
   const edit = (prev: string, k: string) => {
     if (k === "back") return prev.slice(0, -1);
     if (k === "=") return calcStr(prev);
-    if (k === "+" || k === "×") {
+    if (k === "+" || k === "−" || k === "×") {
       const base = prev.replace(/,$/, "");
       if (!base) return prev;
-      return /[+×]$/.test(base) ? base.slice(0, -1) + k : base + k;
+      return /[+−×]$/.test(base) ? base.slice(0, -1) + k : base + k;
     }
-    const num = prev.split(/[+×]/).pop()!; // the number being typed
+    const num = prev.split(/[+−×]/).pop()!; // the number being typed
     if (k === ",") return num.includes(",") ? prev : prev + (num ? "," : "0,");
     if (num.includes(",") && num.split(",")[1].length >= 2) return prev;
     if (num === "0") return prev.slice(0, -1) + k;
@@ -1103,6 +1108,7 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
     if (/^\d$/.test(e.key)) press(e.key);
     else if (e.key === "," || e.key === ".") press(",");
     else if (e.key === "+") press("+");
+    else if (e.key === "-") press("−");
     else if (e.key === "*" || e.key === "x" || e.key === "х") press("×");
     else if (e.key === "=" || e.key === "Enter") press("=");
     else if (e.key === "Backspace") press("back");
@@ -1110,9 +1116,9 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
   // Closing the keypad, or moving it to another field, turns an unfinished sum into its result.
   useEffect(() => {
     const active = pad ? padFor : null;
-    if (active !== "amount") setAmountStr((prev) => (/[+×]/.test(prev) ? calcStr(prev) : prev));
+    if (active !== "amount") setAmountStr((prev) => (/[+−×]/.test(prev) ? calcStr(prev) : prev));
     setExact((x) => {
-      const done = Object.entries(x).filter(([id, v]) => id !== active && /[+×]/.test(v));
+      const done = Object.entries(x).filter(([id, v]) => id !== active && /[+−×]/.test(v));
       return done.length ? { ...x, ...Object.fromEntries(done.map(([id, v]) => [id, calcStr(v)])) } : x;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1131,15 +1137,17 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
 
   const toMinor = (s: string) => Math.round(parseFloat((s || "0").replace(",", ".")) * 100) || 0;
   const amount = calcMinor(amountStr);
-  const isExpr = /[+×]/.test(amountStr);
+  const isExpr = /[+−×]/.test(amountStr);
   const shares = mode === "equal" ? splitEqual(amount, ids, payerId) : ids.map((personId) => ({ personId, amount: calcMinor(exact[personId] ?? "") }));
   const sum = shares.reduce((a, s) => a + s.amount, 0);
   const error =
+    amount < 0 ? "Сумма получилась меньше нуля" :
     amount <= 0 ? "Введи сумму" :
     amount > MAX_MINOR ? "Слишком большая сумма" :
     ids.length === 0 ? "Выбери, на кого делим" :
     !ids.includes(ME) && payerId !== ME ? "Ты сам должен участвовать: платить или быть в долях" :
     ids.length === 1 && ids[0] === payerId ? "Добавь хотя бы одного человека, кроме плательщика" :
+    mode === "exact" && shares.some((x) => x.amount < 0) ? "Доля не может быть меньше нуля" :
     mode === "exact" && sum !== amount ? `Доли в сумме дают ${fmt(sum, currency)}, а трата ${fmt(amount, currency)}` : "";
 
   // Until the user picks a currency by hand, follow the last one used with the single other participant.
@@ -1291,10 +1299,10 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
                   <span className={`flex-1 truncate ${on ? "" : "opacity-60"}`}>{p.id === ME ? "Я" : p.name}</span>
                   {on && mode === "equal" && amount > 0 && <span className="tabular-nums opacity-70">{fmt(share, currency)}</span>}
                   {on && mode === "exact" && (() => {
-                    // Same keypad as the total: digits, comma, + and ×; the result shows under a sum.
+                    // Same keypad as the total: digits, comma, +, − and ×; the result shows under a sum.
                     const v = exact[p.id] ?? "";
                     const active = pad && padFor === p.id;
-                    const expr = /[+×]/.test(v);
+                    const expr = /[+−×]/.test(v);
                     return (
                       <div data-amount role="textbox" tabIndex={0} aria-label={`Сумма: ${p.name}`}
                         onClick={(e) => { e.stopPropagation(); openPad(p.id); }}
@@ -1357,14 +1365,14 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
         {pad && (
           // preventDefault keeps focus on the amount, so tapping a key does not hide the keypad.
           <div data-pad data-no-sheet-drag className="mb-3 grid grid-cols-4 gap-1.5" onMouseDown={(e) => e.preventDefault()}>
-            {["1", "2", "3", "back", "4", "5", "6", "×", "7", "8", "9", "+", ",", "0", "="].map((k) => {
-              const op = k === "+" || k === "×" || k === "=" || k === "back";
-              const label = { back: "Стереть", "+": "Плюс", "×": "Умножить", "=": "Посчитать" }[k] ?? k;
+            {["1", "2", "3", "back", "4", "5", "6", "×", "7", "8", "9", "−", ",", "0", "=", "+"].map((k) => {
+              const op = k === "+" || k === "−" || k === "×" || k === "=" || k === "back";
+              const label = { back: "Стереть", "+": "Плюс", "−": "Минус", "×": "Умножить", "=": "Посчитать" }[k] ?? k;
               return (
                 <button key={k} aria-label={label} onClick={() => press(k)}
-                  className={`h-11 rounded-xl text-xl font-medium active:bg-black/10 ${op ? "bg-black/[0.06]" : "bg-white"} ${k === "=" ? "col-span-2" : ""}`}>
+                  className={`h-11 rounded-xl text-xl font-medium active:bg-black/10 ${op ? "bg-black/[0.06]" : "bg-white"}`}>
                   {k === "back" ? <Delete className="mx-auto size-5" /> : k === "+" ? <Plus className="mx-auto size-5" />
-                    : k === "×" ? <X className="mx-auto size-5" /> : k === "=" ? <Equal className="mx-auto size-5" /> : k}
+                    : k === "−" ? <Minus className="mx-auto size-5" /> : k === "×" ? <X className="mx-auto size-5" /> : k === "=" ? <Equal className="mx-auto size-5" /> : k}
                 </button>
               );
             })}
