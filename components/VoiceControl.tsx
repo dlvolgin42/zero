@@ -132,7 +132,7 @@ export function VoiceControl({ onText, onMessage, onActive }: {
 
   return (
     <>
-      <div className="fixed right-4 bottom-[calc(8.5rem+env(safe-area-inset-bottom))] z-30">
+      <div className="fixed right-4 bottom-[calc(1.5rem+env(safe-area-inset-bottom))] z-30">
         <div className="relative">
           {recording && !busy && <span ref={ringRef} className="absolute inset-0 rounded-full bg-[#a5b4fc]/50" style={{ transform: "scale(1.35)", transition: "transform 90ms linear" }} />}
           <button aria-label={busy ? "Обрабатываю" : recording ? "Закончить запись" : "Записать голосом"} aria-pressed={recording} disabled={busy}

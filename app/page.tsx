@@ -1,9 +1,9 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, CalendarDays, Camera, Check, ChevronLeft, HandCoins, Send, Shuffle, ChevronDown, Copy, Delete, Divide, Equal, Hash, Minus, Mic, Search, Plus, UserPlus, X } from "lucide-react";
+import { ArrowLeft, CalendarDays, Camera, Check, ChevronLeft, ChevronRight, HandCoins, Send, Shuffle, ChevronDown, Copy, Delete, Divide, Equal, Hash, Minus, Mic, Search, Plus, UserPlus, X } from "lucide-react";
 import {
-  Actions, ActionsButton, ActionsGroup, ActionsLabel, App, Block, BlockTitle, Button, Chip, Link, List, ListInput, ListItem,
+  App, Block, BlockTitle, Button, Chip, Link, List, ListInput, ListItem,
   Navbar, Page, Segmented, SegmentedButton,
 } from "konsta/react";
 import { ME, demoExpenses, demoPeople } from "@/lib/demo";
@@ -172,7 +172,6 @@ export default function Root() {
   // Called with the new person's id when "add person" was opened from the expense form.
   const [addCb, setAddCb] = useState<((id: string) => void) | null>(null);
   const openForm = (f: { editId?: string; draft?: Draft; source: "manual" | "voice" }) => go({ s: "form", ...f, key: Date.now() });
-  const [menuOpen, setMenuOpen] = useState(false);
   const [recActive, setRecActive] = useState(false);
   const [profileName, setProfileName] = useState("Дмитрий");
   // "loading": asking the server who we are; "anon": not logged in; "user": logged in with Telegram;
@@ -342,7 +341,7 @@ export default function Root() {
 
   // Swipe right anywhere = back (installed iOS apps have no system back gesture).
   const swipe = useRef({ canBack: false, back });
-  swipe.current = { canBack: stack.length > 1 && !addOpen && !menuOpen && !avatarOpen, back };
+  swipe.current = { canBack: stack.length > 1 && !addOpen && !avatarOpen, back };
   useEffect(() => {
     let sx = 0, sy = 0, tracking = false, fired = false;
     const start = (e: TouchEvent) => {
@@ -469,12 +468,8 @@ export default function Root() {
       <VoiceControl onActive={setRecActive} onMessage={notify}
         onText={recordFromVoice} />
       <div className={`pointer-events-none fixed inset-x-0 bottom-0 z-20 flex justify-center pb-[max(1rem,env(safe-area-inset-bottom))] transition duration-200 ${recActive ? "translate-y-6 opacity-0" : ""}`}>
-        <div className="glass pointer-events-auto flex items-center gap-1.5 rounded-full p-2">
-          <button aria-label="Добавить друга" className="grid size-16 place-items-center rounded-full active:bg-black/10" onClick={() => { setAddCb(null); setAddOpen(true); }}><UserPlus className="size-7" /></button>
-          <button aria-label="Новая трата" onClick={() => openForm({ source: "manual", draft })}
-            className="grid size-[4.5rem] place-items-center rounded-full bg-[#a5b4fc] text-[#111827] shadow-[inset_0_1.5px_1px_rgba(255,255,255,0.85),inset_0_-4px_8px_rgba(79,70,229,0.3),0_6px_16px_rgba(99,102,241,0.42)] transition active:scale-95"><Plus className="size-8" /></button>
-          <button aria-label="Аккаунт" className="grid size-16 place-items-center rounded-full active:bg-black/10" onClick={() => setMenuOpen(true)}><Face person={me} className="size-11" /></button>
-        </div>
+        <button aria-label="Новая трата" onClick={() => openForm({ source: "manual", draft })}
+          className="pointer-events-auto grid size-[4.5rem] place-items-center rounded-full bg-[#a5b4fc] text-[#111827] shadow-[inset_0_1.5px_1px_rgba(255,255,255,0.85),inset_0_-4px_8px_rgba(79,70,229,0.3),0_6px_16px_rgba(99,102,241,0.42)] transition active:scale-95"><Plus className="size-8" /></button>
       </div>
     </>
   );
@@ -540,7 +535,10 @@ export default function Root() {
       : byDebt;
     content = (
       <Page className="pb-44">
-        <div className="flex h-14 items-center justify-center px-4 pt-safe"><Logo className="text-2xl" /></div>
+        <div className="relative flex h-14 items-center justify-center px-4 pt-safe">
+          <Logo className="text-2xl" />
+          <button aria-label="Аккаунт" className="absolute right-3 grid size-11 place-items-center rounded-full active:bg-black/5" onClick={() => go({ s: "settings" })}><Face person={me} className="size-9" /></button>
+        </div>
         {/* Two separate cards, each with its title above it rather than inside. */}
         <div className="mt-2 grid grid-cols-2 gap-3 px-4">
           <div className="flex flex-col">
@@ -552,7 +550,10 @@ export default function Root() {
             <div className="min-h-[4.5rem] flex-1 rounded-2xl bg-white p-4">{totals(owe, neg)}</div>
           </div>
         </div>
-        <div className="mx-4 mb-1.5 mt-6 px-1 text-sm opacity-55">Друзья</div>
+        <div className="mx-4 mb-1.5 mt-6 flex items-center justify-between px-1">
+          <span className="text-sm opacity-55">Друзья</span>
+          <button aria-label="Добавить друга" className="grid size-8 place-items-center rounded-full bg-black/5 active:bg-black/10" onClick={() => { setAddCb(null); setAddOpen(true); }}><UserPlus className="size-4" /></button>
+        </div>
         {friends.length === 0 ? (
           <div className="mx-4 rounded-2xl bg-white p-5 text-center">
             <p className="text-base font-medium">Пока никого нет</p>
@@ -643,6 +644,11 @@ export default function Root() {
           <div className="mt-1 flex items-center gap-1.5 text-sm opacity-55"><Send className="size-3.5" />Вход через Telegram</div>
         </div>
 
+        {/* Temporary home for the history until the owner decides where it belongs. */}
+        <button className={`${card} flex w-full items-center justify-between text-left font-medium active:bg-black/5`} onClick={() => go({ s: "history" })}>
+          История<ChevronRight className="size-5 opacity-40" />
+        </button>
+
         <div className={card}>
           <div className="mb-3 text-sm opacity-55">Валюта по умолчанию</div>
           <select aria-label="Валюта по умолчанию" value={defaultCur} onChange={(e) => chooseDefaultCur(e.target.value as Cur)}
@@ -732,16 +738,6 @@ export default function Root() {
           setSettleOpen(false);
         }} />
       <AddPersonSheet open={addOpen} onClose={() => setAddOpen(false)} getInviteUrl={() => getInviteUrl()} onAdd={(n) => { void addPerson(n).then((id) => addCb?.(id)).catch(() => notify("Не удалось добавить человека")); }} />
-      <Actions opened={menuOpen} onBackdropClick={() => setMenuOpen(false)}>
-        <ActionsGroup>
-          <ActionsLabel>{profileName || "Профиль"}</ActionsLabel>
-          <ActionsButton onClick={() => { setMenuOpen(false); go({ s: "history" }); }}>История</ActionsButton>
-          <ActionsButton onClick={() => { setMenuOpen(false); go({ s: "settings" }); }}>Настройки</ActionsButton>
-        </ActionsGroup>
-        <ActionsGroup>
-          <ActionsButton bold onClick={() => setMenuOpen(false)}>Отмена</ActionsButton>
-        </ActionsGroup>
-      </Actions>
     </App>
   );
 }
