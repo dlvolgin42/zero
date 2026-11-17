@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, CalendarDays, Check, ChevronLeft, HandCoins, Send, Shuffle, ChevronDown, ChevronRight, Copy, Delete, Equal, Hash, Minus, Mic, Search, Plus, UserPlus, X } from "lucide-react";
+import { ArrowLeft, CalendarDays, Check, ChevronLeft, HandCoins, Send, Shuffle, ChevronDown, Copy, Delete, Equal, Hash, Minus, Mic, Search, Plus, UserPlus, X } from "lucide-react";
 import {
   Actions, ActionsButton, ActionsGroup, ActionsLabel, App, Block, BlockTitle, Button, Chip, Link, List, ListInput, ListItem,
   Navbar, Page, Segmented, SegmentedButton,
@@ -539,8 +539,9 @@ export default function Root() {
           </div>
         ) : (
         <FriendList friends={sorted} balances={balances} changes={changes}
-            onTap={(p) => openForm({ source: "manual", draft: { title: "", amount: 0, currency: lastCurWith(p.id) ?? defaultCur, payerId: ME, participantIds: [ME, p.id] } })}
-            onOpen={(p) => go({ s: "friend", id: p.id })} onReorder={reorderFriends} />
+            onTap={(p) => go({ s: "friend", id: p.id })}
+            onAdd={(p) => openForm({ source: "manual", draft: { title: "", amount: 0, currency: lastCurWith(p.id) ?? defaultCur, payerId: ME, participantIds: [ME, p.id] } })}
+            onReorder={reorderFriends} />
         )}
         {bar()}
       </Page>
@@ -727,9 +728,10 @@ export default function Root() {
 
 // Friends list. A quick tap opens a new expense; press and hold a row, then drag it up or down to change the order.
 // No handles or icons: the row lifts, the others slide out of the way, and on release it settles into the new place.
-function FriendList({ friends, balances, changes, onTap, onOpen, onReorder }: {
+// Tapping a row opens the friend's page; the small + on the right starts a new expense with them.
+function FriendList({ friends, balances, changes, onTap, onAdd, onReorder }: {
   friends: Person[]; balances: Record<string, CurMap>; changes: Record<string, CurMap>;
-  onTap: (p: Person) => void; onOpen: (p: Person) => void; onReorder: (ids: string[]) => void;
+  onTap: (p: Person) => void; onAdd: (p: Person) => void; onReorder: (ids: string[]) => void;
 }) {
   type Drag = { i: number; dy: number; target: number; settling: boolean };
   const listRef = useRef<HTMLDivElement>(null);
@@ -849,8 +851,11 @@ function FriendList({ friends, balances, changes, onTap, onOpen, onReorder }: {
             </div>
             <span className="relative flex items-center">
               <DeltaBadge ch={changes[p.id]} />
-              <button className="-m-2 grid place-items-center p-3 opacity-55" aria-label={`Открыть: ${p.name}`}
-                onClick={(ev) => { ev.stopPropagation(); onOpen(p); }}><ChevronRight className="size-5" /></button>
+              {/* The padding widens the tap target around the small circle. */}
+              <button className="group -m-2 grid place-items-center p-2" aria-label={`Новая трата: ${p.name}`}
+                onPointerDown={(ev) => ev.stopPropagation()} onClick={(ev) => { ev.stopPropagation(); onAdd(p); }}>
+                <span className="grid size-8 place-items-center rounded-full bg-black/[0.06] transition group-active:scale-90 group-active:bg-black/15"><Plus className="size-4" strokeWidth={2.5} /></span>
+              </button>
             </span>
           </div>
         );
