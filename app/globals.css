@@ -81,3 +81,7 @@ body { position: fixed; inset: 0; width: 100%; }
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
 }
+
+/* A text caret that blinks on and off (animate-pulse only dims it), so the field being typed into is obvious. */
+.caret { animation: caret-blink 1.05s steps(1) infinite; }
+@keyframes caret-blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }

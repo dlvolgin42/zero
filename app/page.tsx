@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, CalendarDays, Check, ChevronLeft, HandCoins, Send, Shuffle, ChevronDown, Copy, Delete, Equal, Hash, Minus, Mic, Search, Plus, UserPlus, X } from "lucide-react";
+import { ArrowLeft, CalendarDays, Check, ChevronLeft, HandCoins, Send, Shuffle, ChevronDown, Copy, Delete, Divide, Equal, Hash, Minus, Mic, Search, Plus, UserPlus, X } from "lucide-react";
 import {
   Actions, ActionsButton, ActionsGroup, ActionsLabel, App, Block, BlockTitle, Button, Chip, Link, List, ListInput, ListItem,
   Navbar, Page, Segmented, SegmentedButton,
@@ -1053,9 +1053,15 @@ function SettleSheet({ open, onClose, friend, balance, defaultCur, onSave }: {
 const MAX_MINOR = 99_999_999_999_99; // keeps the result well inside safe integers
 function calcMinor(expr: string): number {
   const num = (s: string) => parseFloat((s || "0").replace(",", ".")) || 0;
-  const product = (term: string) => term.split("×").reduce((p, f) => p * num(f), 1);
+  // A term is numbers joined by × and ÷, worked left to right; dividing by zero gives 0.
+  const product = (term: string) => {
+    const t = term.split(/([×÷])/);
+    let r = num(t[0]);
+    for (let i = 1; i < t.length; i += 2) r = t[i] === "×" ? r * num(t[i + 1]) : num(t[i + 1]) ? r / num(t[i + 1]) : 0;
+    return r;
+  };
   // "a+b−c" -> ["a", "+", "b", "−", "c"]: each term is added or subtracted by the sign before it.
-  const parts = expr.replace(/[+−×]$/, "").split(/([+−])/);
+  const parts = expr.replace(/[+−×÷]$/, "").split(/([+−])/);
   let total = product(parts[0]);
   for (let i = 1; i < parts.length; i += 2) total += (parts[i] === "−" ? -1 : 1) * product(parts[i + 1]);
   return Math.round(total * 100);
@@ -1072,7 +1078,7 @@ const groupNum = (v: string) => {
   const grouped = i.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
   return d !== undefined ? `${grouped},${d}` : grouped;
 };
-const prettyExpr = (v: string) => v.split(/([+−×])/).map((part) => (/^[+−×]$/.test(part) ? ` ${part} ` : groupNum(part))).join("");
+const prettyExpr = (v: string) => v.split(/([+−×÷])/).map((part) => (/^[+−×÷]$/.test(part) ? ` ${part} ` : groupNum(part))).join("");
 const fmtPlain = (minor: number) => (minor < 0 ? "−" : "") + groupNum((Math.abs(minor) / 100).toFixed(2).replace(/\.00$/, "").replace(".", ","));
 
 type FormData = Pick<Expense, "title" | "amount" | "currency" | "date" | "payers" | "shares" | "tag">;
@@ -1105,16 +1111,16 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // The amount can be a sum like "1200+350×2−100": the keypad has +, − and ×, and = (or closing the keypad) collapses it to the result.
+  // The amount can be a sum like "1200+350×2−100": the keypad has +, −, × and ÷, and = (or closing the keypad) collapses it to the result.
   const edit = (prev: string, k: string) => {
     if (k === "back") return prev.slice(0, -1);
     if (k === "=") return calcStr(prev);
-    if (k === "+" || k === "−" || k === "×") {
+    if (k === "+" || k === "−" || k === "×" || k === "÷") {
       const base = prev.replace(/,$/, "");
       if (!base) return prev;
-      return /[+−×]$/.test(base) ? base.slice(0, -1) + k : base + k;
+      return /[+−×÷]$/.test(base) ? base.slice(0, -1) + k : base + k;
     }
-    const num = prev.split(/[+−×]/).pop()!; // the number being typed
+    const num = prev.split(/[+−×÷]/).pop()!; // the number being typed
     if (k === ",") return num.includes(",") ? prev : prev + (num ? "," : "0,");
     if (num.includes(",") && num.split(",")[1].length >= 2) return prev;
     if (num === "0") return prev.slice(0, -1) + k;
@@ -1128,9 +1134,9 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
   const openPad = (target: string) => setPadFor(target);
   // Turns every unfinished sum (the total and the shares) into its result.
   const collapseSums = () => {
-    setAmountStr((prev) => (/[+−×]/.test(prev) ? calcStr(prev) : prev));
+    setAmountStr((prev) => (/[+−×÷]/.test(prev) ? calcStr(prev) : prev));
     setExact((x) => {
-      const done = Object.entries(x).filter(([, v]) => /[+−×]/.test(v));
+      const done = Object.entries(x).filter(([, v]) => /[+−×÷]/.test(v));
       return done.length ? { ...x, ...Object.fromEntries(done.map(([id, v]) => [id, calcStr(v)])) } : x;
     });
   };
@@ -1140,6 +1146,7 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
     else if (e.key === "+") press("+");
     else if (e.key === "-") press("−");
     else if (e.key === "*" || e.key === "x" || e.key === "х") press("×");
+    else if (e.key === "/" || e.key === ":") press("÷");
     else if (e.key === "=" || e.key === "Enter") press("=");
     else if (e.key === "Backspace") press("back");
   };
@@ -1154,9 +1161,9 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
   // Closing the keypad, or moving it to another field, turns an unfinished sum into its result.
   useEffect(() => {
     const active = pad ? padFor : null;
-    if (active !== "amount") setAmountStr((prev) => (/[+−×]/.test(prev) ? calcStr(prev) : prev));
+    if (active !== "amount") setAmountStr((prev) => (/[+−×÷]/.test(prev) ? calcStr(prev) : prev));
     setExact((x) => {
-      const done = Object.entries(x).filter(([id, v]) => id !== active && /[+−×]/.test(v));
+      const done = Object.entries(x).filter(([id, v]) => id !== active && /[+−×÷]/.test(v));
       return done.length ? { ...x, ...Object.fromEntries(done.map(([id, v]) => [id, calcStr(v)])) } : x;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1169,7 +1176,7 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
 
   const toMinor = (s: string) => Math.round(parseFloat((s || "0").replace(",", ".")) * 100) || 0;
   const amount = calcMinor(amountStr);
-  const isExpr = /[+−×]/.test(amountStr);
+  const isExpr = /[+−×÷]/.test(amountStr);
   const shares = mode === "equal" ? splitEqual(amount, ids, payerId) : ids.map((personId) => ({ personId, amount: calcMinor(exact[personId] ?? "") }));
   const sum = shares.reduce((a, s) => a + s.amount, 0);
   const error =
@@ -1219,12 +1226,12 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
         <div className="flex items-center gap-3">
           <div data-amount ref={amountRef} role="textbox" aria-label="Сумма" tabIndex={0}
             onClick={() => openPad("amount")} onKeyDown={onAmountKey}
-            className="flex h-14 min-w-0 flex-1 cursor-text flex-col justify-center outline-none">
+            className={`-ml-3 flex h-14 min-w-0 flex-1 cursor-text flex-col justify-center rounded-xl px-3 outline-none transition ${pad && padFor === "amount" ? "bg-[#a5b4fc]/25 ring-1 ring-[#111827]/20" : ""}`}>
             {/* A long sum is cut from the left (rtl), so the end being typed stays visible. */}
             <div className={`truncate font-semibold tabular-nums ${isExpr ? "text-2xl text-left [direction:rtl]" : "text-4xl"}`}>
               <bdi>
                 {amountStr ? prettyExpr(amountStr) : <span className="opacity-25">0</span>}
-                {pad && padFor === "amount" && <span className={`ml-0.5 inline-block w-0.5 animate-pulse bg-[#111827] ${isExpr ? "h-6 translate-y-0.5" : "h-8 translate-y-1"}`} />}
+                {pad && padFor === "amount" && <span className={`ml-0.5 inline-block w-0.5 caret bg-[#111827] ${isExpr ? "h-6 translate-y-0.5" : "h-8 translate-y-1"}`} />}
               </bdi>
             </div>
             {isExpr && <div className="truncate text-base tabular-nums opacity-55">= {fmtPlain(amount)}</div>}
@@ -1340,10 +1347,10 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
                   <span className={`flex-1 truncate ${on ? "" : "opacity-60"}`}>{p.id === ME ? "Я" : p.name}</span>
                   {on && mode === "equal" && amount > 0 && <span className="tabular-nums opacity-70">{fmt(share, currency)}</span>}
                   {on && mode === "exact" && (() => {
-                    // Same keypad as the total: digits, comma, +, − and ×; the result shows under a sum.
+                    // Same keypad as the total: digits, comma, +, −, × and ÷; the result shows under a sum.
                     const v = exact[p.id] ?? "";
                     const active = pad && padFor === p.id;
-                    const expr = /[+−×]/.test(v);
+                    const expr = /[+−×÷]/.test(v);
                     return (
                       <div data-amount role="textbox" tabIndex={0} aria-label={`Сумма: ${p.name}`}
                         onClick={(e) => { e.stopPropagation(); openPad(p.id); e.currentTarget.scrollIntoView({ block: "center", behavior: "smooth" }); }}
@@ -1352,7 +1359,7 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
                         <div className={`truncate [direction:rtl] ${expr ? "text-sm" : "text-base"}`}>
                           <bdi>
                             {v ? prettyExpr(v) : <span className="opacity-30">0</span>}
-                            {active && <span className="ml-0.5 inline-block h-4 w-0.5 translate-y-0.5 animate-pulse bg-[#111827]" />}
+                            {active && <span className="ml-0.5 inline-block h-4 w-0.5 translate-y-0.5 caret bg-[#111827]" />}
                           </bdi>
                         </div>
                         {expr && <div className="truncate text-xs opacity-55">= {fmtPlain(calcMinor(v))}</div>}
@@ -1405,15 +1412,22 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
       <div className="sticky bottom-0 -mx-4 mt-auto bg-[#f6f6f8] px-4 pt-2 pb-[max(1rem,env(safe-area-inset-bottom))]">
         {pad && (
           // preventDefault keeps focus on the amount, so tapping a key does not hide the keypad.
-          <div data-pad data-no-sheet-drag className="mb-3 grid grid-cols-4 gap-1.5" onMouseDown={(e) => e.preventDefault()}>
-            {["1", "2", "3", "back", "4", "5", "6", "×", "7", "8", "9", "−", ",", "0", "=", "+"].map((k) => {
-              const op = k === "+" || k === "−" || k === "×" || k === "=" || k === "back";
-              const label = { back: "Стереть", "+": "Плюс", "−": "Минус", "×": "Умножить", "=": "Посчитать" }[k] ?? k;
+          <div data-pad data-no-sheet-drag className="mb-3 grid grid-cols-5 gap-1.5" onMouseDown={(e) => e.preventDefault()}>
+            {/* Calculator layout: digits on the left, operators in the fourth column, erase on top and a tall "=" on the right. */}
+            {[
+              ["1", ""], ["2", ""], ["3", ""], ["÷", ""], ["back", ""],
+              ["4", ""], ["5", ""], ["6", ""], ["×", ""], ["=", "row-span-3"],
+              ["7", ""], ["8", ""], ["9", ""], ["−", ""],
+              [",", ""], ["0", "col-span-2 h-11"], ["+", ""],
+            ].map(([k, span]) => {
+              const op = ["+", "−", "×", "÷", "=", "back"].includes(k);
+              const label = { back: "Стереть", "+": "Плюс", "−": "Минус", "×": "Умножить", "÷": "Разделить", "=": "Посчитать" }[k] ?? k;
               return (
                 <button key={k} aria-label={label} onClick={() => press(k)}
-                  className={`h-11 rounded-xl text-xl font-medium active:bg-black/10 ${op ? "bg-black/[0.06]" : "bg-white"}`}>
+                  className={`${span ? "" : "h-11"} rounded-xl text-xl font-medium active:bg-black/10 ${span} ${op ? "bg-black/[0.06]" : "bg-white"}`}>
                   {k === "back" ? <Delete className="mx-auto size-5" /> : k === "+" ? <Plus className="mx-auto size-5" />
-                    : k === "−" ? <Minus className="mx-auto size-5" /> : k === "×" ? <X className="mx-auto size-5" /> : k === "=" ? <Equal className="mx-auto size-5" /> : k}
+                    : k === "−" ? <Minus className="mx-auto size-5" /> : k === "×" ? <X className="mx-auto size-5" />
+                    : k === "÷" ? <Divide className="mx-auto size-5" /> : k === "=" ? <Equal className="mx-auto size-5" /> : k}
                 </button>
               );
             })}
