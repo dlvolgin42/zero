@@ -25,7 +25,9 @@ type Screen =
   | { s: "expense"; id: string }
   | { s: "net"; id: string }
   | { s: "history" }
-  | { s: "settings" };
+  | { s: "settings" }
+  // New or edited expense: a full page of its own, so back, swipe right and the Android back button close it.
+  | { s: "form"; editId?: string; draft?: Draft; source: "manual" | "voice"; key: number };
 
 type ThemePref = "auto" | "ios" | "material";
 const THEME_KEY = "theme-pref";
@@ -169,13 +171,7 @@ export default function Root() {
   const [settleOpen, setSettleOpen] = useState(false);
   // Called with the new person's id when "add person" was opened from the expense form.
   const [addCb, setAddCb] = useState<((id: string) => void) | null>(null);
-  // The expense form lives in a bottom sheet over the current screen.
-  const [form, setForm] = useState<{ editId?: string; draft?: Draft; source: "manual" | "voice"; key: number } | null>(null);
-  const [formOpen, setFormOpen] = useState(false);
-  const openForm = (f: { editId?: string; draft?: Draft; source: "manual" | "voice" }) => {
-    setForm({ ...f, key: Date.now() });
-    setFormOpen(true);
-  };
+  const openForm = (f: { editId?: string; draft?: Draft; source: "manual" | "voice" }) => go({ s: "form", ...f, key: Date.now() });
   const [menuOpen, setMenuOpen] = useState(false);
   const [recActive, setRecActive] = useState(false);
   const [profileName, setProfileName] = useState("Дмитрий");
@@ -336,7 +332,7 @@ export default function Root() {
 
   // Swipe right anywhere = back (installed iOS apps have no system back gesture).
   const swipe = useRef({ canBack: false, back });
-  swipe.current = { canBack: stack.length > 1 && !formOpen && !addOpen && !menuOpen && !avatarOpen, back };
+  swipe.current = { canBack: stack.length > 1 && !addOpen && !menuOpen && !avatarOpen, back };
   useEffect(() => {
     let sx = 0, sy = 0, tracking = false, fired = false;
     const start = (e: TouchEvent) => {
@@ -431,14 +427,15 @@ export default function Root() {
   const formPeople = (editing?: Expense) => people.filter((p) =>
     p.id === ME || friendIds === null || friendIds.includes(p.id) || (editing && [...editing.payers, ...editing.shares].some((x) => x.personId === p.id)));
 
+  // Konsta's back link draws its own arrow; this keeps every icon in the app from Lucide.
+  const backLink = (
+    <Link className="k-navbar-back-link" aria-label="Назад" onClick={back}>
+      {theme === "ios" ? <ChevronLeft className="size-7 -ml-1.5" strokeWidth={2.25} /> : <ArrowLeft className="size-6" />}
+    </Link>
+  );
   const page = (title: string, body: React.ReactNode, right?: React.ReactNode) => (
     <Page className="pb-40">
-      <Navbar title={title} left={screen.s !== "home" ? (
-        // Konsta's back link draws its own arrow; this keeps every icon in the app from Lucide.
-        <Link className="k-navbar-back-link" aria-label="Назад" onClick={back}>
-          {theme === "ios" ? <ChevronLeft className="size-7 -ml-1.5" strokeWidth={2.25} /> : <ArrowLeft className="size-6" />}
-        </Link>
-      ) : undefined} right={right} />
+      <Navbar title={title} left={screen.s !== "home" ? backLink : undefined} right={right} />
       {body}
     </Page>
   );
@@ -643,33 +640,38 @@ export default function Root() {
     ));
   }
 
-  const editingExp = form?.editId ? expenses.find((x) => x.id === form.editId) : undefined;
+  if (screen.s === "form") {
+    const f = screen;
+    const editingExp = f.editId ? expenses.find((x) => x.id === f.editId) : undefined;
+    content = (
+      // Slides in from the right like a pushed page; the form fills the height so its parts never move.
+      <Page key={f.key} className="slide-in flex flex-col">
+        <Navbar title={editingExp ? "Изменить трату" : "Новая трата"} left={backLink} />
+        <ExpenseForm
+          people={formPeople(editingExp)} tags={tags} editing={editingExp} lastCurWith={lastCurWith} draft={f.draft} defaultCur={defaultCur}
+          requestAddPerson={(cb) => { setAddCb(() => cb); setAddOpen(true); }}
+          onSave={(data) => {
+            if (editingExp) {
+              const changes: string[] = [];
+              if (editingExp.amount !== data.amount || editingExp.currency !== data.currency) changes.push(`сумма ${fmt(editingExp.amount, editingExp.currency)} → ${fmt(data.amount, data.currency)}`);
+              if (editingExp.title !== data.title) changes.push(`название «${editingExp.title}» → «${data.title}»`);
+              if (JSON.stringify([editingExp.payers, editingExp.shares]) !== JSON.stringify([data.payers, data.shares])) changes.push("плательщик или доли");
+              if (editingExp.date !== data.date) changes.push("дата");
+              if ((editingExp.tag ?? "") !== (data.tag ?? "")) changes.push("тег");
+              saveExpense({ ...editingExp, ...data, log: [...editingExp.log, { who: "Я", when: today(), text: `изменил: ${changes.join(", ") || "без изменений"}` }] });
+            } else {
+              saveExpense({ ...data, id: uuid(), createdBy: ME, source: f.source, deleted: false, log: [{ who: "Я", when: today(), text: f.source === "voice" ? "внёс трату голосом" : "внёс трату" }] });
+            }
+            back();
+          }}
+        />
+      </Page>
+    );
+  }
 
   return (
     <App theme={theme} safeAreas>
       {content}
-      <BottomSheet open={formOpen} onClose={() => setFormOpen(false)} title={editingExp ? "Изменить трату" : "Новая трата"}>
-        {form && (
-          <ExpenseForm
-            key={form.key} people={formPeople(editingExp)} tags={tags} editing={editingExp} lastCurWith={lastCurWith} draft={form.draft} defaultCur={defaultCur}
-            requestAddPerson={(cb) => { setAddCb(() => cb); setAddOpen(true); }}
-            onSave={(data) => {
-              if (editingExp) {
-                const changes: string[] = [];
-                if (editingExp.amount !== data.amount || editingExp.currency !== data.currency) changes.push(`сумма ${fmt(editingExp.amount, editingExp.currency)} → ${fmt(data.amount, data.currency)}`);
-                if (editingExp.title !== data.title) changes.push(`название «${editingExp.title}» → «${data.title}»`);
-                if (JSON.stringify([editingExp.payers, editingExp.shares]) !== JSON.stringify([data.payers, data.shares])) changes.push("плательщик или доли");
-                if (editingExp.date !== data.date) changes.push("дата");
-                if ((editingExp.tag ?? "") !== (data.tag ?? "")) changes.push("тег");
-                saveExpense({ ...editingExp, ...data, log: [...editingExp.log, { who: "Я", when: today(), text: `изменил: ${changes.join(", ") || "без изменений"}` }] });
-              } else {
-                saveExpense({ ...data, id: uuid(), createdBy: ME, source: form.source, deleted: false, log: [{ who: "Я", when: today(), text: form.source === "voice" ? "внёс трату голосом" : "внёс трату" }] });
-              }
-              setFormOpen(false);
-            }}
-          />
-        )}
-      </BottomSheet>
       {toast && (
         <div className="rise pointer-events-none fixed inset-x-4 bottom-[calc(7rem+env(safe-area-inset-bottom))] z-[70] flex justify-center">
           <div className="pointer-events-auto flex max-w-sm items-center gap-3 rounded-2xl bg-[#111827]/92 px-4 py-3 text-sm text-white shadow-lg backdrop-blur">
@@ -1064,8 +1066,9 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
     : draft ?? { title: "", amount: 0, currency: defaultCur, payerId: ME, participantIds: [ME] };
   const wasEqual = !editing || new Set(editing.shares.map((s) => s.amount)).size <= 2;
   const [amountStr, setAmountStr] = useState(init.amount ? String(init.amount / 100).replace(".", ",") : "");
-  // Own keypad for the amount, so the system keyboard never covers the form. It hides while a text field is in use.
-  const [pad, setPad] = useState(false);
+  // Own keypad for the amount, so the system keyboard never covers the form. It always sits at the bottom and only
+  // steps aside while a text field (title, new tag, currency search) has the phone's own keyboard.
+  const [textFocus, setTextFocus] = useState(false);
   // Which field the keypad types into: the total ("amount") or one person's share in "по суммам" (their id).
   const [padFor, setPadFor] = useState<string>("amount");
   const amountRef = useRef<HTMLDivElement>(null);
@@ -1074,12 +1077,11 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
   const [dd, setDd] = useState<null | "payer" | "split" | "cur">(null);
   const [curQuery, setCurQuery] = useState("");
   const [tagNew, setTagNew] = useState(false);
-  // A new expense starts with the amount focused; focusing it shows the keypad.
+  // A new expense starts with the amount focused, so a hardware keyboard types into it at once.
   useEffect(() => {
     if (editing || draft?.amount) return;
-    setPad(true);
-    // The sheet is still sliding in on mount, so focus once it is visible.
-    const t = setTimeout(() => amountRef.current?.focus(), 350);
+    // The page is still sliding in on mount, so focus once it is in place.
+    const t = setTimeout(() => amountRef.current?.focus({ preventScroll: true }), 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1103,7 +1105,15 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
     if (padFor === "amount") setAmountStr((prev) => edit(prev, k));
     else setExact((x) => ({ ...x, [padFor]: edit(x[padFor] ?? "", k) }));
   };
-  const openPad = (target: string) => { setPadFor(target); setPad(true); };
+  const openPad = (target: string) => setPadFor(target);
+  // Turns every unfinished sum (the total and the shares) into its result.
+  const collapseSums = () => {
+    setAmountStr((prev) => (/[+−×]/.test(prev) ? calcStr(prev) : prev));
+    setExact((x) => {
+      const done = Object.entries(x).filter(([, v]) => /[+−×]/.test(v));
+      return done.length ? { ...x, ...Object.fromEntries(done.map(([id, v]) => [id, calcStr(v)])) } : x;
+    });
+  };
   const onAmountKey = (e: React.KeyboardEvent) => {
     if (/^\d$/.test(e.key)) press(e.key);
     else if (e.key === "," || e.key === ".") press(",");
@@ -1113,6 +1123,14 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
     else if (e.key === "=" || e.key === "Enter") press("=");
     else if (e.key === "Backspace") press("back");
   };
+  const [currency, setCurrency] = useState<Cur>(init.currency);
+  const [curTouched, setCurTouched] = useState(!!editing);
+  const [title, setTitle] = useState(init.title);
+  const [payerId, setPayerId] = useState(init.payerId);
+  const [ids, setIds] = useState<string[]>(init.participantIds);
+  const [mode, setMode] = useState<"equal" | "exact">(wasEqual ? "equal" : "exact");
+  // The payer list and an equal split need no digits, so the keypad gives them its room; "по суммам" keeps it for the shares.
+  const pad = !textFocus && dd !== "payer" && !(dd === "split" && mode !== "exact");
   // Closing the keypad, or moving it to another field, turns an unfinished sum into its result.
   useEffect(() => {
     const active = pad ? padFor : null;
@@ -1123,12 +1141,6 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pad, padFor]);
-  const [currency, setCurrency] = useState<Cur>(init.currency);
-  const [curTouched, setCurTouched] = useState(!!editing);
-  const [title, setTitle] = useState(init.title);
-  const [payerId, setPayerId] = useState(init.payerId);
-  const [ids, setIds] = useState<string[]>(init.participantIds);
-  const [mode, setMode] = useState<"equal" | "exact">(wasEqual ? "equal" : "exact");
   const [exact, setExact] = useState<Record<string, string>>(
     editing ? Object.fromEntries(editing.shares.map((s) => [s.personId, String(s.amount / 100).replace(".", ",")])) : {},
   );
@@ -1172,19 +1184,22 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
   const yesterday = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
   const dateLabel = date === today() ? "Сегодня" : date === yesterday ? "Вчера" : ruDate(date);
 
+  const isText = (t: EventTarget | null) => !!(t as HTMLElement | null)?.matches?.("input:not([type=date]), textarea");
   return (
-    <div className="space-y-3 px-4 pt-2 text-[#111827]"
-      // Hide the keypad on click, not on press: hiding earlier moves the layout and the tap misses its target.
+    // Fills the page height: the keypad and the save button stay at the bottom, everything else keeps its place.
+    <div className="flex flex-1 flex-col gap-3 px-4 pt-2 text-[#111827]"
+      onFocus={(e) => { if (isText(e.target)) setTextFocus(true); }}
+      onBlur={(e) => { if (isText(e.target) && !isText(e.relatedTarget)) setTextFocus(false); }}
       onClickCapture={(e) => {
         const t = e.target as HTMLElement;
-        if (!t.closest("[data-amount],[data-pad]")) setPad(false);
+        if (!t.closest("[data-amount],[data-pad]")) collapseSums();
         if (!t.closest("[data-dd],[data-pad]")) setDd(null); // typing a share must not close the split list
       }}>
       <div className={card}>
         <div className="flex items-center gap-3">
           <div data-amount ref={amountRef} role="textbox" aria-label="Сумма" tabIndex={0}
             onClick={() => openPad("amount")} onKeyDown={onAmountKey}
-            className="min-w-0 flex-1 cursor-text outline-none">
+            className="flex h-14 min-w-0 flex-1 cursor-text flex-col justify-center outline-none">
             {/* A long sum is cut from the left (rtl), so the end being typed stays visible. */}
             <div className={`truncate font-semibold tabular-nums ${isExpr ? "text-2xl text-left [direction:rtl]" : "text-4xl"}`}>
               <bdi>
@@ -1232,19 +1247,25 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
           value={title} onChange={(e) => setTitle(e.target.value)} />
       </div>
 
-      {/* The outcome sits right under the amount, so it stays on screen however the dropdowns below are opened. */}
-      {amount > 0 && mode === "exact" && sum !== amount && (
-        <div className="rise flex items-center justify-between rounded-2xl bg-white px-4 py-3">
-          <span className="opacity-70">{sum < amount ? "Осталось распределить" : "Больше суммы на"}</span>
-          <span className={`text-lg font-semibold tabular-nums ${sum > amount ? neg : ""}`}>{fmt(Math.abs(amount - sum), currency)}</span>
-        </div>
-      )}
-      {amount > 0 && myResult !== 0 && (
-        <div className="rise flex items-center justify-between rounded-2xl bg-white px-4 py-3">
-          <span className="opacity-70">{myResult > 0 ? "Тебе должны" : "Ты должен"}{others.length === 1 ? ` · ${nameOf(others[0])}` : ""}</span>
-          <span className={`text-lg font-semibold tabular-nums ${myResult > 0 ? pos : neg}`}>{fmt(myResult, currency)}</span>
-        </div>
-      )}
+      {/* One row of fixed height right under the amount: what is left to split, what is wrong, or who owes whom.
+          It is always there, so nothing below it moves as the numbers change. */}
+      <div className="flex h-12 shrink-0 items-center justify-between gap-3 rounded-2xl bg-white px-4">
+        {amount > 0 && mode === "exact" && sum !== amount ? (
+          <>
+            <span className="truncate opacity-70">{sum < amount ? "Осталось распределить" : "Больше суммы на"}</span>
+            <span className={`shrink-0 text-lg font-semibold tabular-nums ${sum > amount ? neg : ""}`}>{fmt(Math.abs(amount - sum), currency)}</span>
+          </>
+        ) : error && amount !== 0 ? (
+          <span className="line-clamp-2 text-sm leading-tight text-[#E0245E]">{error}</span>
+        ) : amount > 0 && myResult !== 0 ? (
+          <>
+            <span className="truncate opacity-70">{myResult > 0 ? "Тебе должны" : "Ты должен"}{others.length === 1 ? ` · ${nameOf(others[0])}` : ""}</span>
+            <span className={`shrink-0 text-lg font-semibold tabular-nums ${myResult > 0 ? pos : neg}`}>{fmt(myResult, currency)}</span>
+          </>
+        ) : (
+          <span className="truncate opacity-40">{amount > 0 ? "Никто никому не должен" : "Здесь будет, кто кому должен"}</span>
+        )}
+      </div>
 
       {/* Two selects side by side: who paid (one person) and who it is split between (several). */}
       <div className="grid grid-cols-2 gap-3" data-dd>
@@ -1305,7 +1326,7 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
                     const expr = /[+−×]/.test(v);
                     return (
                       <div data-amount role="textbox" tabIndex={0} aria-label={`Сумма: ${p.name}`}
-                        onClick={(e) => { e.stopPropagation(); openPad(p.id); }}
+                        onClick={(e) => { e.stopPropagation(); openPad(p.id); e.currentTarget.scrollIntoView({ block: "center", behavior: "smooth" }); }}
                         onKeyDown={(e) => { if (padFor !== p.id) openPad(p.id); onAmountKey(e); }}
                         className={`flex h-9 w-32 cursor-text flex-col justify-center rounded-xl px-3 text-right tabular-nums outline-none ${active ? "bg-[#a5b4fc]/35 ring-1 ring-[#111827]/20" : "bg-black/5"} ${expr ? "h-11" : ""}`}>
                         <div className={`truncate [direction:rtl] ${expr ? "text-sm" : "text-base"}`}>
@@ -1361,7 +1382,7 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
           onBlur={() => { if (!tag.trim()) setTagNew(false); }} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} />
       )}
 
-      <div className="sticky bottom-0 -mx-4 bg-[#f6f6f8] px-4 pt-2 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <div className="sticky bottom-0 -mx-4 mt-auto bg-[#f6f6f8] px-4 pt-2 pb-[max(1rem,env(safe-area-inset-bottom))]">
         {pad && (
           // preventDefault keeps focus on the amount, so tapping a key does not hide the keypad.
           <div data-pad data-no-sheet-drag className="mb-3 grid grid-cols-4 gap-1.5" onMouseDown={(e) => e.preventDefault()}>
@@ -1378,8 +1399,6 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
             })}
           </div>
         )}
-        {/* Hidden while typing: a hint appearing above the button would shift the keys under the finger. */}
-        {error && amount > 0 && !pad && <p className="mb-2 text-center text-sm text-[#E0245E]">{error}</p>}
         <Button large colors={mainBtn} disabled={!!error} onClick={() => onSave({
           title: title.trim() || "Трата", amount, currency, date,
           payers: [{ personId: payerId, amount }], shares, tag: tag.trim() || undefined,

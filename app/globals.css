@@ -39,6 +39,9 @@ html.sheet-open .k-page { overflow: hidden !important; }
 
 @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(0.96); } to { opacity: 1; transform: none; } }
 .rise { animation: rise 200ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+/* A page pushed on top (the expense form) slides in from the right edge. */
+@keyframes slide-in { from { transform: translate3d(100%, 0, 0); } to { transform: none; } }
+.slide-in { animation: slide-in 300ms cubic-bezier(0.32, 0.72, 0, 1); }
 
 /* Segmented control as a glass pill: a soft track and a glass thumb that slides. */
 .glass-track {
