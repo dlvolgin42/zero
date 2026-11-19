@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { ArrowLeft, CalendarDays, Camera, Check, ChevronLeft, ChevronRight, HandCoins, Send, Shuffle, ChevronDown, Copy, Delete, Divide, Equal, Hash, Minus, Mic, Search, Plus, UserPlus, X } from "lucide-react";
 import {
   App, Block, BlockTitle, Button, Chip, Link, List, ListInput, ListItem,
@@ -341,28 +342,101 @@ export default function Root() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  // Swipe right anywhere = back (installed iOS apps have no system back gesture).
-  const swipe = useRef({ canBack: false, back });
-  swipe.current = { canBack: stack.length > 1 && !addOpen && !avatarOpen && !curOpen, back };
+  // Swipe right anywhere = back (installed iOS apps have no system back gesture). Like dragging a sheet away: the page
+  // follows the finger with the previous page revealed under it, and it only goes back once dragged past the middle
+  // (or flicked fast); otherwise it springs back. Styles are written straight to the layers, not through React state,
+  // so the app is not re-rendered on every finger move.
+  const [peek, setPeek] = useState(false);
+  const layerEls = useRef<Record<number, HTMLDivElement | null>>({});
+  const settling = useRef(false); // a finished swipe is still animating: ignore new ones
+  const swipe = useRef({ canBack: false, back, depth: 1 });
+  swipe.current = { canBack: stack.length > 1 && !addOpen && !avatarOpen && !curOpen && !recActive, back, depth: stack.length };
+  const clearLayerStyles = () => {
+    for (const el of Object.values(layerEls.current)) if (el) { el.style.transition = ""; el.style.transform = ""; el.style.boxShadow = ""; }
+  };
+  // Whenever the stack changes the page is at rest again: drop the leftover drag styles and the page underneath.
   useEffect(() => {
-    let sx = 0, sy = 0, tracking = false, fired = false;
-    const start = (e: TouchEvent) => {
-      const t = e.touches[0];
-      sx = t.clientX; sy = t.clientY; fired = false;
-      tracking = e.touches.length === 1 && !(e.target as HTMLElement).closest("input, select, textarea, [data-no-swipe]");
-    };
-    const move = (e: TouchEvent) => {
-      if (!tracking || fired) return;
-      const t = e.touches[0];
-      const dx = t.clientX - sx, dy = t.clientY - sy;
-      if (dx > 80 && Math.abs(dy) < dx * 0.5) {
-        fired = true;
-        if (swipe.current.canBack && !document.documentElement.classList.contains("sheet-open")) swipe.current.back();
+    clearLayerStyles();
+    settling.current = false;
+    setPeek(false);
+  }, [stack.length]);
+  useEffect(() => {
+    const MS = 280;
+    const EASE = `transform ${MS}ms cubic-bezier(0.32, 0.72, 0, 1)`;
+    type Drag = { x0: number; y0: number; w: number; lock: "pending" | "swipe" | "scroll"; base: number; x: number; samples: { t: number; x: number }[] };
+    let g: Drag | null = null;
+    let quietUntil = 0; // the lift of the finger after a swipe must not count as a tap
+    const paint = (x: number, w: number, animate: boolean) => {
+      const n = swipe.current.depth;
+      const top = layerEls.current[n - 1], under = layerEls.current[n - 2];
+      if (!top) return;
+      const p = Math.min(1, Math.max(0, x / w));
+      top.style.transition = animate ? EASE : "none";
+      top.style.transform = `translate3d(${x}px, 0, 0)`;
+      top.style.boxShadow = x > 0 ? "-10px 0 30px rgba(17, 24, 39, 0.18)" : "";
+      if (under) {
+        under.style.transition = animate ? EASE : "none";
+        under.style.transform = `translate3d(${-(1 - p) * w * 0.25}px, 0, 0)`;
+        const dim = under.querySelector<HTMLElement>("[data-dim]");
+        if (dim) { dim.style.transition = animate ? `opacity ${MS}ms ease` : "none"; dim.style.opacity = String(0.12 * (1 - p)); }
       }
     };
+    const start = (e: TouchEvent) => {
+      g = null;
+      if (settling.current || e.touches.length !== 1) return;
+      if (!swipe.current.canBack || document.documentElement.classList.contains("sheet-open")) return;
+      if ((e.target as HTMLElement).closest("input, select, textarea, [data-no-swipe]")) return;
+      const t = e.touches[0];
+      g = { x0: t.clientX, y0: t.clientY, w: window.innerWidth, lock: "pending", base: 0, x: 0, samples: [] };
+    };
+    const move = (e: TouchEvent) => {
+      if (!g || g.lock === "scroll") return;
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      const dx = t.clientX - g.x0, dy = t.clientY - g.y0;
+      if (g.lock === "pending") {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        // Mostly sideways and to the right: this is a swipe. Anything else is scrolling or something else; leave it alone.
+        if (dx > 0 && Math.abs(dy) < dx * 0.6) { g.lock = "swipe"; g.base = dx; flushSync(() => setPeek(true)); }
+        else { g.lock = "scroll"; return; }
+      }
+      if (e.cancelable) e.preventDefault(); // no page scrolling or rubber-banding while dragging
+      g.x = Math.min(g.w, Math.max(0, dx - g.base));
+      g.samples.push({ t: e.timeStamp, x: g.x });
+      if (g.samples.length > 6) g.samples.shift();
+      paint(g.x, g.w, false);
+    };
+    const end = (e: TouchEvent) => {
+      const d = g; g = null;
+      if (!d || d.lock !== "swipe") return;
+      const a = d.samples[0], b = d.samples[d.samples.length - 1];
+      const speed = a && b && b.t > a.t ? (b.x - a.x) / (b.t - a.t) : 0; // px per ms over the last few moves
+      const commit = e.type !== "touchcancel" && (d.x > d.w * 0.5 || (speed > 0.6 && d.x > 30));
+      settling.current = true;
+      quietUntil = performance.now() + 400;
+      if (commit) {
+        paint(d.w, d.w, true);
+        setTimeout(() => {
+          swipe.current.back();
+          // The stack effect above resets everything; if going back somehow did not happen, put the page back.
+          setTimeout(() => { if (settling.current) { clearLayerStyles(); settling.current = false; setPeek(false); } }, 700);
+        }, MS);
+      } else {
+        paint(0, d.w, true);
+        setTimeout(() => { clearLayerStyles(); settling.current = false; setPeek(false); }, MS);
+      }
+    };
+    const swallowClick = (e: MouseEvent) => { if (performance.now() < quietUntil) { e.stopPropagation(); e.preventDefault(); } };
     window.addEventListener("touchstart", start, { passive: true });
-    window.addEventListener("touchmove", move, { passive: true });
-    return () => { window.removeEventListener("touchstart", start); window.removeEventListener("touchmove", move); };
+    window.addEventListener("touchmove", move, { passive: false });
+    window.addEventListener("touchend", end);
+    window.addEventListener("touchcancel", end);
+    window.addEventListener("click", swallowClick, true);
+    return () => {
+      window.removeEventListener("touchstart", start); window.removeEventListener("touchmove", move);
+      window.removeEventListener("touchend", end); window.removeEventListener("touchcancel", end);
+      window.removeEventListener("click", swallowClick, true);
+    };
   }, []);
   const name = (id: string) => people.find((p) => p.id === id)?.name ?? "?";
   const balances = useMemo(() => balancesFor(ME, expenses, nettings), [expenses, nettings]);
@@ -458,7 +532,7 @@ export default function Root() {
   );
   const page = (title: string, body: React.ReactNode, right?: React.ReactNode) => (
     <Page className="pb-40">
-      <Navbar title={title} left={screen.s !== "home" ? backLink : undefined} right={right} />
+      <Navbar title={title} left={backLink} right={right} />
       {body}
     </Page>
   );
@@ -489,213 +563,232 @@ export default function Root() {
     );
   };
 
-  let content: React.ReactNode;
+  // Draws one screen of the stack. The current page is drawn on its own; while a swipe back is in progress the previous
+  // page is drawn too, under it, so it can be seen as the current one slides away.
+  const renderScreen = (screen: Screen): React.ReactNode => {
+    let content: React.ReactNode;
 
-  if (screen.s === "login") {
-    content = (
-      <Page className="flex flex-col justify-center text-center">
-        <h1 className="flex justify-center"><Logo className="text-5xl" /></h1>
-        <p className={`${muted} mt-2`}>Общие траты с друзьями: кто кому сколько должен</p>
-        <Block className="min-h-[5.5rem]">
-          {auth === "anon" && (
-            <>
-              <Button large colors={mainBtn} onClick={() => { const inv = new URLSearchParams(location.search).get("invite"); location.assign(`/api/auth/telegram/login${inv ? `?invite=${encodeURIComponent(inv)}` : ""}`); }}>Войти через Telegram</Button>
-              <p className={`${muted} mt-2`}>Откроется Telegram: подтверди вход и вернись в браузер</p>
-            </>
-          )}
-          {auth === "demo" && (
-            <>
-              <Button large colors={mainBtn} onClick={enterDemo}>Войти в демо</Button>
-              <p className={`${muted} mt-2`}>Здесь нет базы данных, поэтому вход через Telegram недоступен</p>
-            </>
-          )}
-        </Block>
-      </Page>
-    );
-  } else if (screen.s === "home") {
-    const owed: CurMap = {}, owe: CurMap = {};
-    for (const m of Object.values(balances))
-      for (const [c, v] of nonZero(m)) {
-        if (v > 0) owed[c] = (owed[c] ?? 0) + v; else owe[c] = (owe[c] ?? 0) - v;
-      }
-    const totals = (m: CurMap, cls: string) =>
-      nonZero(m).length === 0
-        ? <div className="text-xl font-semibold opacity-40">0</div>
-        : (
-          <div className={`grid grid-cols-[auto_1fr] gap-x-2 text-xl font-semibold tabular-nums ${cls}`}>
-            {nonZero(m).map(([c, v]) => <Fragment key={c}><span>{SYMBOL[c]}</span><span><AnimatedNum v={v} /></span></Fragment>)}
-          </div>
-        );
-    const friends = friendIds
-      ? (friendIds.map((id) => people.find((p) => p.id === id)).filter(Boolean) as Person[])
-      : people.filter((p) => p.id !== ME);
-    const hasDebt = (p: Person) => nonZero(balances[p.id]).length > 0;
-    // Default: friends with a balance first. Once the user has dragged rows, their order wins; new friends go to the end.
-    const byDebt = [...friends.filter(hasDebt), ...friends.filter((p) => !hasDebt(p))];
-    const sorted = friendOrder.length
-      ? [...(friendOrder.map((id) => friends.find((f) => f.id === id)).filter(Boolean) as Person[]), ...byDebt.filter((f) => !friendOrder.includes(f.id))]
-      : byDebt;
-    content = (
-      <Page className="pb-44">
-        <div className="relative flex h-14 items-center justify-center px-4 pt-safe">
-          <Logo className="text-2xl" />
-          <button aria-label="Аккаунт" className="absolute right-3 grid size-11 place-items-center rounded-full active:bg-black/5" onClick={() => go({ s: "settings" })}><Face person={me} className="size-9" /></button>
-        </div>
-        {/* Two separate cards, each with its title above it rather than inside. */}
-        <div className="mt-2 grid grid-cols-2 gap-3 px-4">
-          <div className="flex flex-col">
-            <div className="mb-1.5 px-1 text-sm opacity-55">Тебе должны</div>
-            <div className="min-h-[4.5rem] flex-1 rounded-2xl bg-white p-4">{totals(owed, pos)}</div>
-          </div>
-          <div className="flex flex-col">
-            <div className="mb-1.5 px-1 text-sm opacity-55">Ты должен</div>
-            <div className="min-h-[4.5rem] flex-1 rounded-2xl bg-white p-4">{totals(owe, neg)}</div>
-          </div>
-        </div>
-        <div className="mx-4 mb-1.5 mt-6 flex items-center justify-between px-1">
-          <span className="text-sm opacity-55">Друзья</span>
-          <button aria-label="Добавить друга" className="grid size-8 place-items-center rounded-full bg-black/5 active:bg-black/10" onClick={() => { setAddCb(null); setAddOpen(true); }}><UserPlus className="size-4" /></button>
-        </div>
-        {friends.length === 0 ? (
-          <div className="mx-4 rounded-2xl bg-white p-5 text-center">
-            <p className="text-base font-medium">Пока никого нет</p>
-            <p className={`${muted} mt-1`}>Добавь человека, с которым делишь траты. Можно даже без аккаунта, например «Саша».</p>
-            <button className="mt-4 h-11 rounded-full bg-[#111827] px-5 font-medium text-white active:opacity-80" onClick={() => { setAddCb(null); setAddOpen(true); }}>Добавить человека</button>
-          </div>
-        ) : (
-        <FriendList friends={sorted} balances={balances} changes={changes}
-            onTap={(p) => go({ s: "friend", id: p.id })}
-            onAdd={(p) => openForm({ source: "manual", draft: { title: "", amount: 0, currency: lastCurWith(p.id) ?? defaultCur, payerId: ME, participantIds: [ME, p.id] } })}
-            onReorder={reorderFriends} />
-        )}
-        {bar()}
-      </Page>
-    );
-  } else if (screen.s === "friend") {
-    const p = people.find((x) => x.id === screen.id)!;
-    const list = expenses.filter((e) => involves(e, ME) && involves(e, p.id));
-    content = page(p.name, <>
-      <Block strong inset>
-        <div className={muted}>Баланс</div>
-        <div className="relative text-left text-2xl font-semibold [&>div]:text-left"><BalanceLines m={balances[p.id]} ch={changes[p.id]} /></div>
-        <button className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#111827] font-medium text-white active:opacity-80"
-          onClick={() => { setSettleWith(p); setSettleOpen(true); }}>
-          <HandCoins className="size-5" />Вернуть долг
-        </button>
-        {nonZero(balances[p.id]).length > 1 && <Button tonal colors={tonalBtn} large className="mt-3" onClick={() => go({ s: "net", id: p.id })}>Свести в одну валюту</Button>}
-      </Block>
-      {!p.hasAccount && (
-        <Block strong inset>
-          {p.name} пока без аккаунта. Отправь ему эту ссылку: когда он войдёт через Telegram, все траты с ним перейдут на его аккаунт, а вы станете друзьями. Ссылка одноразовая.
-          <CopyLink label="Скопировать ссылку для него" getUrl={() => getInviteUrl(p.id)} />
-        </Block>
-      )}
-      <BlockTitle>Общие траты</BlockTitle>
-      <List strong inset dividers>
-        {list.length === 0 && <ListItem title="Пока ничего" />}
-        {list.map((e) => expenseItem(e, p.id))}
-      </List>
-      {bar({ title: "", amount: 0, currency: lastCurWith(p.id) ?? defaultCur, payerId: ME, participantIds: [ME, p.id] })}
-    </>);
-  } else if (screen.s === "expense") {
-    const e = expenses.find((x) => x.id === screen.id)!;
-    const toggleDeleted = () => markDeleted(e, !e.deleted);
-    const parts = (list: Expense["payers"]) => (
-      <List strong inset dividers>{list.map((p) => <ListItem key={p.personId} title={name(p.personId)} after={fmt(p.amount, e.currency)} />)}</List>
-    );
-    content = page(e.title, <>
-      <Block strong inset>
-        <div className={`text-3xl font-semibold ${e.deleted ? "line-through opacity-55" : ""}`}>{fmt(e.amount, e.currency)}</div>
-        <div className={muted}>{ruDate(e.date)}{e.tag ? ` · #${e.tag}` : ""}{e.source === "voice" ? " · внесено голосом" : ""}</div>
-      </Block>
-      <BlockTitle>Кто платил</BlockTitle>{parts(e.payers)}
-      <BlockTitle>Доли</BlockTitle>{parts(e.shares)}
-      <BlockTitle>История</BlockTitle>
-      <List strong inset dividers>{e.log.map((l, i) => <ListItem key={i} title={`${l.who} ${l.text}`} after={ruDate(l.when)} />)}</List>
-      <Block className="space-y-2">
-        {!e.deleted && <Button tonal colors={tonalBtn} large onClick={() => openForm({ editId: e.id, source: e.source })}>Изменить</Button>}
-        <Button clear large colors={clearBtn} className={e.deleted ? "" : "!text-[#E0245E]"} onClick={toggleDeleted}>{e.deleted ? "Восстановить" : "Удалить"}</Button>
-      </Block>
-    </>);
-  } else if (screen.s === "net") {
-    content = page(`Взаимозачёт: ${name(screen.id)}`,
-      <NetForm ratesDay={ratesDay} bal={balances[screen.id] ?? {}} onApply={(items) => {
-        const made = items.map(({ sign, ...it }) => ({
-          id: uuid(), date: today(), ...it,
-          debtor: sign > 0 ? screen.id : ME, creditor: sign > 0 ? ME : screen.id,
-        }));
-        setNettings((ns) => [...ns, ...made]);
-        if (auth === "user") {
-          Promise.all(made.map((n) => apiCall("POST", "/api/nettings", n))).then(() => refresh()).catch(() => { notify("Не удалось сохранить взаимозачёт"); void refresh(); });
+    if (screen.s === "login") {
+      content = (
+        <Page className="flex flex-col justify-center text-center">
+          <h1 className="flex justify-center"><Logo className="text-5xl" /></h1>
+          <p className={`${muted} mt-2`}>Общие траты с друзьями: кто кому сколько должен</p>
+          <Block className="min-h-[5.5rem]">
+            {auth === "anon" && (
+              <>
+                <Button large colors={mainBtn} onClick={() => { const inv = new URLSearchParams(location.search).get("invite"); location.assign(`/api/auth/telegram/login${inv ? `?invite=${encodeURIComponent(inv)}` : ""}`); }}>Войти через Telegram</Button>
+                <p className={`${muted} mt-2`}>Откроется Telegram: подтверди вход и вернись в браузер</p>
+              </>
+            )}
+            {auth === "demo" && (
+              <>
+                <Button large colors={mainBtn} onClick={enterDemo}>Войти в демо</Button>
+                <p className={`${muted} mt-2`}>Здесь нет базы данных, поэтому вход через Telegram недоступен</p>
+              </>
+            )}
+          </Block>
+        </Page>
+      );
+    } else if (screen.s === "home") {
+      const owed: CurMap = {}, owe: CurMap = {};
+      for (const m of Object.values(balances))
+        for (const [c, v] of nonZero(m)) {
+          if (v > 0) owed[c] = (owed[c] ?? 0) + v; else owe[c] = (owe[c] ?? 0) - v;
         }
-        back();
-      }} />);
-  } else if (screen.s === "history") {
-    content = page("История", <HistoryList expenses={expenses} nettings={nettings} tags={tags} name={name} net={(e) => myNet(e)} open={(id) => go({ s: "expense", id })} />);
-  } else {
-    const meP = people.find((x) => x.id === ME)!;
-    const card = "rounded-2xl bg-white p-4";
-    content = page("Настройки", (
-      <div className="space-y-3 px-4 pt-2 text-[#111827]">
-        <div className={`${card} flex flex-col items-center pt-6 pb-5`}>
-          <button className="relative" aria-label="Выбрать аватарку" onClick={openAvatarPicker}>
-            <Face person={meP} className="size-24" />
-          </button>
-          <input aria-label="Имя" value={profileName} onChange={(e) => rename(e.target.value)} maxLength={24} placeholder="Твоё имя"
-            className="mt-4 w-full bg-transparent text-center text-2xl font-semibold outline-none placeholder:opacity-35" />
-          <div className="mt-1 flex items-center gap-1.5 text-sm opacity-55"><Send className="size-3.5" />Вход через Telegram</div>
-        </div>
-
-        {/* Temporary home for the history until the owner decides where it belongs. */}
-        <button className={`${card} flex w-full items-center justify-between text-left font-medium active:bg-black/5`} onClick={() => go({ s: "history" })}>
-          История<ChevronRight className="size-5 opacity-40" />
-        </button>
-
-        <button className={`${card} flex w-full items-center gap-3 text-left active:bg-black/5`} onClick={() => { setCurQ(""); setCurOpen(true); }}>
-          <div className="min-w-0 flex-1">
-            <div className="text-sm opacity-55">Валюта по умолчанию</div>
-            <div className="mt-0.5 truncate font-medium">{SYMBOL[defaultCur]} {defaultCur} · {CUR_INFO[defaultCur].name}</div>
+      const totals = (m: CurMap, cls: string) =>
+        nonZero(m).length === 0
+          ? <div className="text-xl font-semibold opacity-40">0</div>
+          : (
+            <div className={`grid grid-cols-[auto_1fr] gap-x-2 text-xl font-semibold tabular-nums ${cls}`}>
+              {nonZero(m).map(([c, v]) => <Fragment key={c}><span>{SYMBOL[c]}</span><span><AnimatedNum v={v} /></span></Fragment>)}
+            </div>
+          );
+      const friends = friendIds
+        ? (friendIds.map((id) => people.find((p) => p.id === id)).filter(Boolean) as Person[])
+        : people.filter((p) => p.id !== ME);
+      const hasDebt = (p: Person) => nonZero(balances[p.id]).length > 0;
+      // Default: friends with a balance first. Once the user has dragged rows, their order wins; new friends go to the end.
+      const byDebt = [...friends.filter(hasDebt), ...friends.filter((p) => !hasDebt(p))];
+      const sorted = friendOrder.length
+        ? [...(friendOrder.map((id) => friends.find((f) => f.id === id)).filter(Boolean) as Person[]), ...byDebt.filter((f) => !friendOrder.includes(f.id))]
+        : byDebt;
+      content = (
+        <Page className="pb-44">
+          <div className="relative flex h-14 items-center justify-center px-4 pt-safe">
+            <Logo className="text-2xl" />
+            <button aria-label="Аккаунт" className="absolute right-3 grid size-11 place-items-center rounded-full active:bg-black/5" onClick={() => go({ s: "settings" })}><Face person={me} className="size-9" /></button>
           </div>
-          <ChevronRight className="size-5 shrink-0 opacity-40" />
-        </button>
+          {/* Two separate cards, each with its title above it rather than inside. */}
+          <div className="mt-2 grid grid-cols-2 gap-3 px-4">
+            <div className="flex flex-col">
+              <div className="mb-1.5 px-1 text-sm opacity-55">Тебе должны</div>
+              <div className="min-h-[4.5rem] flex-1 rounded-2xl bg-white p-4">{totals(owed, pos)}</div>
+            </div>
+            <div className="flex flex-col">
+              <div className="mb-1.5 px-1 text-sm opacity-55">Ты должен</div>
+              <div className="min-h-[4.5rem] flex-1 rounded-2xl bg-white p-4">{totals(owe, neg)}</div>
+            </div>
+          </div>
+          <div className="mx-4 mb-1.5 mt-6 flex items-center justify-between px-1">
+            <span className="text-sm opacity-55">Друзья</span>
+            <button aria-label="Добавить друга" className="grid size-8 place-items-center rounded-full bg-black/5 active:bg-black/10" onClick={() => { setAddCb(null); setAddOpen(true); }}><UserPlus className="size-4" /></button>
+          </div>
+          {friends.length === 0 ? (
+            <div className="mx-4 rounded-2xl bg-white p-5 text-center">
+              <p className="text-base font-medium">Пока никого нет</p>
+              <p className={`${muted} mt-1`}>Добавь человека, с которым делишь траты. Можно даже без аккаунта, например «Саша».</p>
+              <button className="mt-4 h-11 rounded-full bg-[#111827] px-5 font-medium text-white active:opacity-80" onClick={() => { setAddCb(null); setAddOpen(true); }}>Добавить человека</button>
+            </div>
+          ) : (
+          <FriendList friends={sorted} balances={balances} changes={changes}
+              onTap={(p) => go({ s: "friend", id: p.id })}
+              onAdd={(p) => openForm({ source: "manual", draft: { title: "", amount: 0, currency: lastCurWith(p.id) ?? defaultCur, payerId: ME, participantIds: [ME, p.id] } })}
+              onReorder={reorderFriends} />
+          )}
+          {bar()}
+        </Page>
+      );
+    } else if (screen.s === "friend") {
+      const p = people.find((x) => x.id === screen.id)!;
+      const list = expenses.filter((e) => involves(e, ME) && involves(e, p.id));
+      content = page(p.name, <>
+        <Block strong inset>
+          <div className={muted}>Баланс</div>
+          <div className="relative text-left text-2xl font-semibold [&>div]:text-left"><BalanceLines m={balances[p.id]} ch={changes[p.id]} /></div>
+          <button className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#111827] font-medium text-white active:opacity-80"
+            onClick={() => { setSettleWith(p); setSettleOpen(true); }}>
+            <HandCoins className="size-5" />Вернуть долг
+          </button>
+          {nonZero(balances[p.id]).length > 1 && <Button tonal colors={tonalBtn} large className="mt-3" onClick={() => go({ s: "net", id: p.id })}>Свести в одну валюту</Button>}
+        </Block>
+        {!p.hasAccount && (
+          <Block strong inset>
+            {p.name} пока без аккаунта. Отправь ему эту ссылку: когда он войдёт через Telegram, все траты с ним перейдут на его аккаунт, а вы станете друзьями. Ссылка одноразовая.
+            <CopyLink label="Скопировать ссылку для него" getUrl={() => getInviteUrl(p.id)} />
+          </Block>
+        )}
+        <BlockTitle>Общие траты</BlockTitle>
+        <List strong inset dividers>
+          {list.length === 0 && <ListItem title="Пока ничего" />}
+          {list.map((e) => expenseItem(e, p.id))}
+        </List>
+        {bar({ title: "", amount: 0, currency: lastCurWith(p.id) ?? defaultCur, payerId: ME, participantIds: [ME, p.id] })}
+      </>);
+    } else if (screen.s === "expense") {
+      const e = expenses.find((x) => x.id === screen.id)!;
+      const toggleDeleted = () => markDeleted(e, !e.deleted);
+      const parts = (list: Expense["payers"]) => (
+        <List strong inset dividers>{list.map((p) => <ListItem key={p.personId} title={name(p.personId)} after={fmt(p.amount, e.currency)} />)}</List>
+      );
+      content = page(e.title, <>
+        <Block strong inset>
+          <div className={`text-3xl font-semibold ${e.deleted ? "line-through opacity-55" : ""}`}>{fmt(e.amount, e.currency)}</div>
+          <div className={muted}>{ruDate(e.date)}{e.tag ? ` · #${e.tag}` : ""}{e.source === "voice" ? " · внесено голосом" : ""}</div>
+        </Block>
+        <BlockTitle>Кто платил</BlockTitle>{parts(e.payers)}
+        <BlockTitle>Доли</BlockTitle>{parts(e.shares)}
+        <BlockTitle>История</BlockTitle>
+        <List strong inset dividers>{e.log.map((l, i) => <ListItem key={i} title={`${l.who} ${l.text}`} after={ruDate(l.when)} />)}</List>
+        <Block className="space-y-2">
+          {!e.deleted && <Button tonal colors={tonalBtn} large onClick={() => openForm({ editId: e.id, source: e.source })}>Изменить</Button>}
+          <Button clear large colors={clearBtn} className={e.deleted ? "" : "!text-[#E0245E]"} onClick={toggleDeleted}>{e.deleted ? "Восстановить" : "Удалить"}</Button>
+        </Block>
+      </>);
+    } else if (screen.s === "net") {
+      content = page(`Взаимозачёт: ${name(screen.id)}`,
+        <NetForm ratesDay={ratesDay} bal={balances[screen.id] ?? {}} onApply={(items) => {
+          const made = items.map(({ sign, ...it }) => ({
+            id: uuid(), date: today(), ...it,
+            debtor: sign > 0 ? screen.id : ME, creditor: sign > 0 ? ME : screen.id,
+          }));
+          setNettings((ns) => [...ns, ...made]);
+          if (auth === "user") {
+            Promise.all(made.map((n) => apiCall("POST", "/api/nettings", n))).then(() => refresh()).catch(() => { notify("Не удалось сохранить взаимозачёт"); void refresh(); });
+          }
+          back();
+        }} />);
+    } else if (screen.s === "history") {
+      content = page("История", <HistoryList expenses={expenses} nettings={nettings} tags={tags} name={name} net={(e) => myNet(e)} open={(id) => go({ s: "expense", id })} />);
+    } else {
+      const meP = people.find((x) => x.id === ME)!;
+      const card = "rounded-2xl bg-white p-4";
+      content = page("Настройки", (
+        <div className="space-y-3 px-4 pt-2 text-[#111827]">
+          <div className={`${card} flex flex-col items-center pt-6 pb-5`}>
+            <button className="relative" aria-label="Выбрать аватарку" onClick={openAvatarPicker}>
+              <Face person={meP} className="size-24" />
+            </button>
+            <input aria-label="Имя" value={profileName} onChange={(e) => rename(e.target.value)} maxLength={24} placeholder="Твоё имя"
+              className="mt-4 w-full bg-transparent text-center text-2xl font-semibold outline-none placeholder:opacity-35" />
+            <div className="mt-1 flex items-center gap-1.5 text-sm opacity-55"><Send className="size-3.5" />Вход через Telegram</div>
+          </div>
 
-        <button className="h-12 w-full rounded-2xl bg-white font-medium text-[#E0245E] active:bg-black/5" onClick={() => void logout()}>Выйти</button>
-      </div>
-    ));
-  }
+          {/* Temporary home for the history until the owner decides where it belongs. */}
+          <button className={`${card} flex w-full items-center justify-between text-left font-medium active:bg-black/5`} onClick={() => go({ s: "history" })}>
+            История<ChevronRight className="size-5 opacity-40" />
+          </button>
 
-  if (screen.s === "form") {
-    const f = screen;
-    const editingExp = f.editId ? expenses.find((x) => x.id === f.editId) : undefined;
-    content = (
-      // Slides in from the right like a pushed page; the form fills the height so its parts never move.
-      <Page key={f.key} className="slide-in flex flex-col">
-        <Navbar title={editingExp ? "Изменить трату" : "Новая трата"} left={backLink} />
-        <ExpenseForm
-          people={formPeople(editingExp)} tags={tags} editing={editingExp} lastCurWith={lastCurWith} draft={f.draft} defaultCur={defaultCur}
-          requestAddPerson={(cb) => { setAddCb(() => cb); setAddOpen(true); }}
-          onSave={(data) => {
-            if (editingExp) {
-              const changes: string[] = [];
-              if (editingExp.amount !== data.amount || editingExp.currency !== data.currency) changes.push(`сумма ${fmt(editingExp.amount, editingExp.currency)} → ${fmt(data.amount, data.currency)}`);
-              if (editingExp.title !== data.title) changes.push(`название «${editingExp.title}» → «${data.title}»`);
-              if (JSON.stringify([editingExp.payers, editingExp.shares]) !== JSON.stringify([data.payers, data.shares])) changes.push("плательщик или доли");
-              if (editingExp.date !== data.date) changes.push("дата");
-              if ((editingExp.tag ?? "") !== (data.tag ?? "")) changes.push("тег");
-              saveExpense({ ...editingExp, ...data, log: [...editingExp.log, { who: "Я", when: today(), text: `изменил: ${changes.join(", ") || "без изменений"}` }] });
-            } else {
-              saveExpense({ ...data, id: uuid(), createdBy: ME, source: f.source, deleted: false, log: [{ who: "Я", when: today(), text: f.source === "voice" ? "внёс трату голосом" : "внёс трату" }] });
-            }
-            back();
-          }}
-        />
-      </Page>
-    );
-  }
+          <button className={`${card} flex w-full items-center gap-3 text-left active:bg-black/5`} onClick={() => { setCurQ(""); setCurOpen(true); }}>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm opacity-55">Валюта по умолчанию</div>
+              <div className="mt-0.5 truncate font-medium">{SYMBOL[defaultCur]} {defaultCur} · {CUR_INFO[defaultCur].name}</div>
+            </div>
+            <ChevronRight className="size-5 shrink-0 opacity-40" />
+          </button>
+
+          <button className="h-12 w-full rounded-2xl bg-white font-medium text-[#E0245E] active:bg-black/5" onClick={() => void logout()}>Выйти</button>
+        </div>
+      ));
+    }
+
+    if (screen.s === "form") {
+      const f = screen;
+      const editingExp = f.editId ? expenses.find((x) => x.id === f.editId) : undefined;
+      content = (
+        // Slides in from the right like a pushed page; the form fills the height so its parts never move.
+        <Page key={f.key} className="slide-in flex flex-col">
+          <Navbar title={editingExp ? "Изменить трату" : "Новая трата"} left={backLink} />
+          <ExpenseForm
+            people={formPeople(editingExp)} tags={tags} editing={editingExp} lastCurWith={lastCurWith} draft={f.draft} defaultCur={defaultCur}
+            requestAddPerson={(cb) => { setAddCb(() => cb); setAddOpen(true); }}
+            onSave={(data) => {
+              if (editingExp) {
+                const changes: string[] = [];
+                if (editingExp.amount !== data.amount || editingExp.currency !== data.currency) changes.push(`сумма ${fmt(editingExp.amount, editingExp.currency)} → ${fmt(data.amount, data.currency)}`);
+                if (editingExp.title !== data.title) changes.push(`название «${editingExp.title}» → «${data.title}»`);
+                if (JSON.stringify([editingExp.payers, editingExp.shares]) !== JSON.stringify([data.payers, data.shares])) changes.push("плательщик или доли");
+                if (editingExp.date !== data.date) changes.push("дата");
+                if ((editingExp.tag ?? "") !== (data.tag ?? "")) changes.push("тег");
+                saveExpense({ ...editingExp, ...data, log: [...editingExp.log, { who: "Я", when: today(), text: `изменил: ${changes.join(", ") || "без изменений"}` }] });
+              } else {
+                saveExpense({ ...data, id: uuid(), createdBy: ME, source: f.source, deleted: false, log: [{ who: "Я", when: today(), text: f.source === "voice" ? "внёс трату голосом" : "внёс трату" }] });
+              }
+              back();
+            }}
+          />
+        </Page>
+      );
+    }
+    return content;
+  };
+
+  // While a swipe back is under way the previous page is mounted under the current one.
+  const showUnder = peek && stack.length > 1;
+  const layers = showUnder ? [stack.length - 2, stack.length - 1] : [stack.length - 1];
 
   return (
     <App theme={theme} safeAreas>
-      {content}
+      {layers.map((idx) => {
+        const isTop = idx === stack.length - 1;
+        return (
+          <div key={idx} ref={(el) => { layerEls.current[idx] = el; }}
+            className={`absolute inset-0 overflow-hidden ${isTop ? "z-10" : "z-0"}`}
+            style={isTop ? undefined : { transform: "translate3d(-25%, 0, 0)" }}>
+            {renderScreen(stack[idx])}
+            {!isTop && <div data-dim className="pointer-events-none absolute inset-0 z-[60] bg-black" style={{ opacity: 0.12 }} />}
+          </div>
+        );
+      })}
       {toast && (
         <div className="rise pointer-events-none fixed inset-x-4 bottom-[calc(7rem+env(safe-area-inset-bottom))] z-[70] flex justify-center">
           <div className="pointer-events-auto flex max-w-sm items-center gap-3 rounded-2xl bg-[#111827]/92 px-4 py-3 text-sm text-white shadow-lg backdrop-blur">
