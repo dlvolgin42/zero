@@ -11,7 +11,7 @@ const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export function VoiceControl({ onText, onMessage, onActive }: {
-  onText: (text: string) => void;
+  onText: (text: string) => void | Promise<void>;
   onMessage: (message: string) => void;
   onActive: (active: boolean) => void;
 }) {
@@ -64,9 +64,11 @@ export function VoiceControl({ onText, onMessage, onActive }: {
       try { rec.stop(); } catch { clearTimeout(t); resolve(); }
     });
     const text = transcript.current.trim();
-    stopRecognition(); busyRef.current = false; setBusy(false); setActive(false);
-    if (text) callbacks.current.onText(text);
-    else callbacks.current.onMessage(hasRecognition.current ? "Не расслышал. Попробуй ещё раз" : "Запись работает. Распознавание речи подключим вместе с сервером");
+    stopRecognition();
+    // "Processing" stays on while the phrase is being turned into an expense (the server asks Claude, a second or two).
+    if (text) { try { await callbacks.current.onText(text); } catch {} }
+    busyRef.current = false; setBusy(false); setActive(false);
+    if (!text) callbacks.current.onMessage(hasRecognition.current ? "Не расслышал. Попробуй ещё раз" : "Этот браузер не распознаёт речь. Открой Zero в Safari или Chrome");
   };
 
   const begin = async () => {
@@ -132,7 +134,8 @@ export function VoiceControl({ onText, onMessage, onActive }: {
 
   return (
     <>
-      <div className="fixed right-4 bottom-[calc(1.5rem+env(safe-area-inset-bottom))] z-30">
+      {/* Above the recording bar (z-40 over its z-30): the button sits at the bar's right end and must stay tappable to finish. */}
+      <div className="fixed right-4 bottom-[calc(1.5rem+env(safe-area-inset-bottom))] z-40">
         <div className="relative">
           {recording && !busy && <span ref={ringRef} className="absolute inset-0 rounded-full bg-[#a5b4fc]/50" style={{ transform: "scale(1.35)", transition: "transform 90ms linear" }} />}
           <button aria-label={busy ? "Обрабатываю" : recording ? "Закончить запись" : "Записать голосом"} aria-pressed={recording} disabled={busy}
@@ -154,7 +157,7 @@ export function VoiceControl({ onText, onMessage, onActive }: {
                 <button aria-label="Отменить запись" className="grid size-12 shrink-0 place-items-center rounded-full active:bg-black/10" onClick={cancel}><Trash2 className="size-6 text-[#E0245E]" /></button>
                 <span className="size-2.5 shrink-0 animate-pulse rounded-full bg-[#E0245E]" />
                 <span className="w-10 shrink-0 text-base font-medium tabular-nums">{fmtTime(seconds)}</span>
-                <span className="flex h-9 flex-1 items-center justify-end gap-[3px] overflow-hidden pr-2" aria-hidden>
+                <span className="flex h-9 flex-1 items-center justify-end gap-[3px] overflow-hidden pr-16" aria-hidden>
                   {bars.map((v, i) => <span key={i} className="w-[3px] shrink-0 rounded-full bg-[#111827]/70" style={{ height: 4 + v * 30 }} />)}
                 </span>
               </>

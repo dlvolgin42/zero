@@ -7,6 +7,7 @@ export interface Draft {
   currency: Cur;
   payerId: string;
   participantIds: string[];
+  date?: string; // YYYY-MM-DD; today when absent
 }
 
 const CUR_WORDS: [RegExp, Cur][] = [

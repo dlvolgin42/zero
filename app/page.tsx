@@ -488,11 +488,18 @@ export default function Root() {
 
   // Dictated phrase -> expense. If the phrase has an amount and someone to split with, it is saved at once
   // (with a way to edit it); otherwise the form opens pre-filled with whatever was understood.
-  const recordFromVoice = (text: string) => {
-    const d = parsePhrase(text, formPeople(), ME, defaultCur);
+  // The server asks Claude Haiku to read the phrase; without a server, a key or a network the rule-based parser does it.
+  const recordFromVoice = async (text: string) => {
+    const ppl = formPeople();
+    let d: Draft = parsePhrase(text, ppl, ME, defaultCur);
+    if (authRef.current === "user") {
+      try {
+        d = (await apiCall("POST", "/api/voice", { text, me: ME, people: ppl.map((p) => ({ id: p.id, name: p.name })), defaultCur, today: today() })) as Draft;
+      } catch {}
+    }
     if (d.amount > 0 && d.participantIds.some((id) => id !== d.payerId)) {
       const e: Expense = {
-        id: uuid(), title: d.title, amount: d.amount, currency: d.currency, date: today(),
+        id: uuid(), title: d.title, amount: d.amount, currency: d.currency, date: d.date ?? today(),
         payers: [{ personId: d.payerId, amount: d.amount }],
         shares: splitEqual(d.amount, d.participantIds, d.payerId),
         createdBy: ME, source: "voice", deleted: false,
@@ -1291,7 +1298,7 @@ function ExpenseForm({ people, tags, editing, draft, defaultCur, onSave, request
   const [exact, setExact] = useState<Record<string, string>>(
     editing ? Object.fromEntries(editing.shares.map((s) => [s.personId, String(s.amount / 100).replace(".", ",")])) : {},
   );
-  const [date, setDate] = useState(editing?.date ?? today());
+  const [date, setDate] = useState(editing?.date ?? draft?.date ?? today());
   const [tag, setTag] = useState(editing?.tag ?? "");
 
   const toMinor = (s: string) => Math.round(parseFloat((s || "0").replace(",", ".")) * 100) || 0;
